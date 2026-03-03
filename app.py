@@ -107,11 +107,12 @@ def main():
         st.session_state.messages = [
             {
                 "role": "assistant",
-                "content": "Hello 👋 Welcome to Saksham Support. I'm Care. I can help with iPhone (iOS 18) or Google Pixel, or guide you if something seems suspicious or scam-related. How can I help you today?",
+                "content": "Hi there 👋 Welcome to Saksham Support. I'm here to help with your technical issues — or to listen if something feels off or scam-related. How can I help you today?",
             }
         ]
+    # Only set when user has said iPhone or Pixel; never default to iPhone
     if "last_platform" not in st.session_state:
-        st.session_state.last_platform = PLATFORM_APPLE
+        st.session_state.last_platform = None
 
     # Display previous messages (greeting is always the first message, then user can type)
     for msg in st.session_state.messages:
@@ -143,14 +144,14 @@ def main():
         )
         return
 
-    # Retrieval filter: use explicit device from this message, else last known (no cross-platform bleed)
+    # Device: only set when user says iPhone or Pixel in their message; never default
     platform_filter = get_platform_filter(user_input)
     if platform_filter is not None:
         st.session_state.last_platform = platform_filter
-    else:
-        platform_filter = st.session_state.last_platform
+    # When last_platform is None: retrieve from both (no filter), tell prompt device not confirmed
+    effective_filter = st.session_state.last_platform
 
-    chain = build_chain(vectorstore, platform_filter=platform_filter)
+    chain = build_chain(vectorstore, platform_filter=effective_filter)
 
     # Limit history to last 8 messages
     recent_messages = st.session_state.messages[-8:]
@@ -162,10 +163,12 @@ def main():
 
         full_response = ""
 
+        # Pass NOT_CONFIRMED when user has never said iPhone or Pixel — no default to iPhone
+        platform_for_prompt = st.session_state.last_platform if st.session_state.last_platform is not None else "NOT_CONFIRMED"
         for chunk in chain.stream({
             "input": user_input,
             "history": history_text,
-            "current_platform": st.session_state.last_platform,
+            "current_platform": platform_for_prompt,
         }):
             if "answer" in chunk:
                 full_response += chunk["answer"]
