@@ -339,7 +339,7 @@ def main():
         # (response_used_rag can be too strict in deployment due to model output differences)
         if retrieved_docs and (
             response_used_rag(full_response, retrieved_docs)
-            or len(full_response.strip()) > 80
+            or len(full_response.strip()) > 150
         ):
             render_sources(retrieved_docs)
 
