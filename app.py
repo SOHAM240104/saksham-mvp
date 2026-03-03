@@ -9,8 +9,9 @@ from langchain_classic.chains.combine_documents import create_stuff_documents_ch
 
 load_dotenv()
 
-# Single DB (matches ingest.py); routing is via metadata filter
-VECTOR_DB_PATH = "./care_vector_db"
+# Single DB (matches ingest.py); path relative to this file so it works from any cwd
+_APP_DIR = os.path.dirname(os.path.abspath(__file__))
+VECTOR_DB_PATH = os.path.join(_APP_DIR, "care_vector_db")
 
 # Metadata values must match ingest.py platform names
 PLATFORM_APPLE = "IOS18"
@@ -124,7 +125,11 @@ def main():
     # Single vectorstore; route by metadata filter (platform)
     vectorstore = load_vectorstore(VECTOR_DB_PATH)
     if vectorstore is None:
-        st.error("Support database not available. Run ingest.py first.")
+        st.error("Support database not available.")
+        st.info(
+            "**Local:** In the project folder run `python ingest.py` once, then restart this app.\n\n"
+            "**Streamlit Cloud:** Set the app run command to: `python ingest.py && streamlit run app.py` and add `OPENAI_API_KEY` and `FIRECRAWL_API_KEY` in Secrets."
+        )
         return
 
     # Retrieval filter: use explicit device from this message, else last known (no cross-platform bleed)
