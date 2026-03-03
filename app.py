@@ -9,9 +9,18 @@ from langchain_classic.chains.combine_documents import create_stuff_documents_ch
 
 load_dotenv()
 
-# Single DB (matches ingest.py); path relative to this file so it works from any cwd
+# Single DB (matches ingest.py); try app dir first, then cwd (for Streamlit Cloud / different launches)
 _APP_DIR = os.path.dirname(os.path.abspath(__file__))
-VECTOR_DB_PATH = os.path.join(_APP_DIR, "care_vector_db")
+
+
+def _get_db_path():
+    """Return first path where care_vector_db exists, else app dir (so error message shows where we looked)."""
+    for base in (_APP_DIR, os.getcwd(), "."):
+        p = os.path.join(base, "care_vector_db") if base != "." else "care_vector_db"
+        p = os.path.abspath(p)
+        if os.path.isdir(p) and os.path.exists(os.path.join(p, "chroma.sqlite3")):
+            return p
+    return os.path.join(_APP_DIR, "care_vector_db")
 
 # Metadata values must match ingest.py platform names
 PLATFORM_APPLE = "IOS18"
@@ -123,12 +132,14 @@ def main():
         st.write(user_input)
 
     # Single vectorstore; route by metadata filter (platform)
-    vectorstore = load_vectorstore(VECTOR_DB_PATH)
+    db_path = _get_db_path()
+    vectorstore = load_vectorstore(db_path)
     if vectorstore is None:
         st.error("Support database not available.")
+        st.code(db_path, language=None)
         st.info(
             "**Local:** In the project folder run `python ingest.py` once, then restart this app.\n\n"
-            "**Streamlit Cloud:** Set the app run command to: `python ingest.py && streamlit run app.py` and add `OPENAI_API_KEY` and `FIRECRAWL_API_KEY` in Secrets."
+            "**Streamlit Cloud:** Ensure the repo includes `care_vector_db` and redeploy, or set run command to: `python ingest.py && streamlit run app.py` (with Secrets)."
         )
         return
 
