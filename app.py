@@ -335,8 +335,12 @@ def main():
             st.exception(e)
             return
 
-        # Only show sources when the response is genuinely doc-grounded
-        if retrieved_docs and response_used_rag(full_response, retrieved_docs):
+        # Show sources when we have retrieved docs and the response looks substantive
+        # (response_used_rag can be too strict in deployment due to model output differences)
+        if retrieved_docs and (
+            response_used_rag(full_response, retrieved_docs)
+            or len(full_response.strip()) > 80
+        ):
             render_sources(retrieved_docs)
 
     st.session_state.messages.append({
