@@ -19,6 +19,8 @@ PLATFORM_GOOGLE = "PIXEL"
 MAX_INPUT_LENGTH = 2000       # characters — hard cap on user input
 HISTORY_WINDOW = 8            # number of messages to pass as context
 RETRIEVAL_K = 8               # number of docs to retrieve
+MMR_FETCH_K = 24              # candidates to fetch before MMR (>= RETRIEVAL_K)
+MMR_LAMBDA = 0.5              # 0 = max diversity, 1 = max relevance
 
 
 # -------------------------
@@ -90,11 +92,15 @@ User Message:
 
     combine_docs_chain = create_stuff_documents_chain(llm, prompt)
 
-    search_kwargs = {"k": RETRIEVAL_K}
+    search_kwargs = {
+        "k": RETRIEVAL_K,
+        "fetch_k": MMR_FETCH_K,
+        "lambda_mult": MMR_LAMBDA,
+    }
     if platform_filter is not None:
         search_kwargs["filter"] = {"platform": platform_filter}
 
-    retriever = _vectorstore.as_retriever(search_kwargs=search_kwargs)
+    retriever = _vectorstore.as_retriever(search_type="mmr", search_kwargs=search_kwargs)
     return create_retrieval_chain(retriever, combine_docs_chain)
 
 
