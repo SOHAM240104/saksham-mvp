@@ -128,42 +128,17 @@ def sanitize_input(text: str) -> str:
 
 
 # -------------------------
-# RAG USAGE DETECTOR
-# Returns True only when the response is genuinely grounded in retrieved docs.
-# Heuristic: check if any meaningful chunk of the response overlaps with doc content.
-# This prevents sources showing on greetings, scam acks, off-topic redirects, etc.
-# -------------------------
-def response_used_rag(response: str, docs: list) -> bool:
-    if not docs or not response:
-        return False
-
-    response_lower = response.lower()
-
-    for doc in docs:
-        # Take first 200 chars of the chunk as a fingerprint
-        chunk_words = doc.page_content.strip().lower().split()
-        # Build trigrams from the chunk
-        trigrams = [
-            " ".join(chunk_words[i:i+3])
-            for i in range(len(chunk_words) - 2)
-        ]
-        # If 2 or more trigrams from this doc appear in the response, it was used
-        matches = sum(1 for tg in trigrams if tg in response_lower)
-        if matches >= 2:
-            return True
-
-    return False
-
-
-# -------------------------
 # SOURCE FORMATTER
 # Renders retrieved docs as clean structured citations in Streamlit
 # -------------------------
+MAX_SOURCES_SHOWN = 5
+
+
 def render_sources(docs: list):
     if not docs:
         return
 
-    # Deduplicate by source path, preserve order
+    # Deduplicate by source path, preserve order; show at most MAX_SOURCES_SHOWN
     seen = set()
     unique_docs = []
     for doc in docs:
@@ -171,6 +146,7 @@ def render_sources(docs: list):
         if src not in seen:
             seen.add(src)
             unique_docs.append(doc)
+    unique_docs = unique_docs[:MAX_SOURCES_SHOWN]
 
     with st.expander(f"📄 {len(unique_docs)} source{'s' if len(unique_docs) > 1 else ''} referenced", expanded=False):
 
@@ -365,8 +341,7 @@ def main():
             st.exception(e)
             return
 
-        # Only show sources when the response is genuinely doc-grounded
-        if retrieved_docs and response_used_rag(full_response, retrieved_docs):
+        if retrieved_docs:
             render_sources(retrieved_docs)
 
     st.session_state.messages.append({
