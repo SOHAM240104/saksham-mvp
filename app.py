@@ -23,7 +23,7 @@ PLATFORM_APPLE  = "IOS18"
 PLATFORM_GOOGLE = "PIXEL"
 MAX_INPUT_LENGTH = 2000
 HISTORY_WINDOW   = 8
-RETRIEVAL_K      = 8
+RETRIEVAL_K      = 5
 REFUSAL_PHRASE   = "I couldn't find this information in the available sources."
 ENABLE_GROUNDING_CHECK = False
 
