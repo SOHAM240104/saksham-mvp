@@ -163,7 +163,7 @@ def render_sources(docs: list):
     if not docs:
         return
 
-    # Deduplicate by source path
+    # Deduplicate by source path, preserve order
     seen = set()
     unique_docs = []
     for doc in docs:
@@ -172,54 +172,84 @@ def render_sources(docs: list):
             seen.add(src)
             unique_docs.append(doc)
 
-    with st.expander("📄 Sources used in this response", expanded=False):
+    with st.expander(f"📄 {len(unique_docs)} source{'s' if len(unique_docs) > 1 else ''} referenced", expanded=False):
+
         for i, doc in enumerate(unique_docs, 1):
             meta = doc.metadata
 
-            # Extract metadata fields — gracefully handle missing keys
-            source_path = meta.get("source", "Unknown source")
-            platform = meta.get("platform", "")
-            section = meta.get("section", meta.get("title", ""))
-            page = meta.get("page", None)
-
-            # Build a clean display name from the file path
+            source_path = meta.get("source", "")
+            platform    = meta.get("platform", "")
+            section     = meta.get("section", meta.get("title", ""))
+            page        = meta.get("page", None)
             source_name = os.path.basename(source_path) if source_path else "Unknown"
 
-            # Platform label
-            platform_label = ""
+            # Platform badge colours
             if platform == PLATFORM_APPLE:
-                platform_label = "🍎 iPhone (iOS 18)"
+                badge_color  = "#e8f4f8"
+                badge_border = "#0071e3"
+                badge_text   = "🍎 iPhone (iOS 18)"
             elif platform == PLATFORM_GOOGLE:
-                platform_label = "📱 Google Pixel"
+                badge_color  = "#e8f5e9"
+                badge_border = "#34a853"
+                badge_text   = "📱 Google Pixel"
+            else:
+                badge_color  = "#f5f5f5"
+                badge_border = "#aaa"
+                badge_text   = "📄 General"
 
-            # Render citation block
-            st.markdown(f"**Source {i}**")
-            cols = st.columns([2, 2, 1])
-            with cols[0]:
-                st.caption(f"📁 {source_name}")
-            with cols[1]:
-                if platform_label:
-                    st.caption(platform_label)
-            with cols[2]:
-                if page is not None:
-                    st.caption(f"Page {page}")
+            # Build header line
+            page_tag = f" &nbsp;·&nbsp; Page {page}" if page is not None else ""
+            section_tag = f"<br><span style='font-size:0.78em;color:#888;'>Section: {section}</span>" if section else ""
 
-            if section:
-                st.caption(f"Section: *{section}*")
-
-            # Show a short excerpt of the chunk (first 300 chars)
-            excerpt = doc.page_content.strip()
-            if len(excerpt) > 300:
-                excerpt = excerpt[:300] + "…"
             st.markdown(
-                f"<div style='background:#f8f9fa; border-left:3px solid #dee2e6; "
-                f"padding:8px 12px; border-radius:4px; font-size:0.85em; color:#555;'>"
-                f"{excerpt}</div>",
+                f"""
+                <div style='
+                    border: 1px solid {badge_border};
+                    border-left: 4px solid {badge_border};
+                    border-radius: 8px;
+                    background: {badge_color};
+                    padding: 12px 16px 6px 16px;
+                    margin-bottom: 4px;
+                '>
+                    <div style='display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap;'>
+                        <span style='font-weight:600; font-size:0.9em; color:#333;'>
+                            {i}. {source_name}{page_tag}
+                        </span>
+                        <span style='
+                            font-size:0.75em;
+                            background:white;
+                            border:1px solid {badge_border};
+                            border-radius:20px;
+                            padding:2px 10px;
+                            color:{badge_border};
+                            font-weight:500;
+                        '>{badge_text}</span>
+                    </div>
+                    {section_tag}
+                </div>
+                """,
                 unsafe_allow_html=True
             )
 
-            if i < len(unique_docs):
-                st.divider()
+            # Full content in a clean scrollable block — no truncation
+            content = doc.page_content.strip()
+            st.markdown(
+                f"""
+                <div style='
+                    background: #ffffff;
+                    border: 1px solid #e0e0e0;
+                    border-top: none;
+                    border-radius: 0 0 8px 8px;
+                    padding: 12px 16px;
+                    font-size: 0.84em;
+                    color: #444;
+                    line-height: 1.65;
+                    white-space: pre-wrap;
+                    margin-bottom: 14px;
+                '>{content}</div>
+                """,
+                unsafe_allow_html=True
+            )
 
 
 # -------------------------
@@ -335,12 +365,8 @@ def main():
             st.exception(e)
             return
 
-        # Show sources when we have retrieved docs and the response looks substantive
-        # (response_used_rag can be too strict in deployment due to model output differences)
-        if retrieved_docs and (
-            response_used_rag(full_response, retrieved_docs)
-            or len(full_response.strip()) > 150
-        ):
+        # Only show sources when the response is genuinely doc-grounded
+        if retrieved_docs and response_used_rag(full_response, retrieved_docs):
             render_sources(retrieved_docs)
 
     st.session_state.messages.append({
