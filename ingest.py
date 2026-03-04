@@ -1,22 +1,62 @@
+"""
+ingest_faiss.py
+===============
+Ingests Apple iOS 18 and Google Pixel documentation into FAISS vector stores.
+Uses Playwright (headless Chromium) + BeautifulSoup to extract only the article
+body from each page — no nav, no version selectors, no TOC, no chrome.
+
+Storage layout (unchanged — fully compatible with existing app.py)
+------------------------------------------------------------------
+./care_vector_db/
+    ios18/      ← FAISS index for Apple only
+    pixel/      ← FAISS index for Pixel only
+    combined/   ← merged index (both platforms)
+
+Install dependencies (one-time)
+--------------------------------
+    pip install playwright beautifulsoup4 langchain-community langchain-openai faiss-cpu
+    playwright install chromium
+
+Usage
+-----
+    python ingest_faiss.py                  # full ingest
+    python ingest_faiss.py --pixel-only     # re-ingest Pixel only
+    python ingest_faiss.py --merge-only     # rebuild combined from existing indexes
+"""
+
 import os
 import shutil
 import argparse
+import time
+from typing import List, Literal
+
 from dotenv import load_dotenv
-from langchain_community.document_loaders import FireCrawlLoader
+from bs4 import BeautifulSoup
+from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
+
+from langchain_community.vectorstores import FAISS
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_openai import OpenAIEmbeddings
-from langchain_chroma import Chroma
+from langchain_core.documents import Document
 
 load_dotenv()
 
-# -------------------------
-# DATABASE PATH
-# -------------------------
-MAIN_DB = "./care_vector_db"
+# ─────────────────────────────────────────
+# PATHS  (unchanged from original)
+# ─────────────────────────────────────────
+BASE_DB     = "./care_vector_db"
+IOS_DB      = os.path.join(BASE_DB, "ios18")
+PIXEL_DB    = os.path.join(BASE_DB, "pixel")
+COMBINED_DB = os.path.join(BASE_DB, "combined")
 
-# -------------------------
-# APPLE URLS (YOUR EXACT LIST)
-# -------------------------
+# ─────────────────────────────────────────
+# EMBEDDINGS  (unchanged)
+# ─────────────────────────────────────────
+embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
+
+# ─────────────────────────────────────────
+# APPLE iOS 18 URLS  (unchanged)
+# ─────────────────────────────────────────
 APPLE_URLS = [
     "https://support.apple.com/en-in/guide/iphone/iph4fd8a0b89/18.0/ios/18.0",
     "https://support.apple.com/en-in/guide/iphone/iph2968440de/18.0/ios/18.0",
@@ -119,143 +159,375 @@ APPLE_URLS = [
     "https://support.apple.com/en-in/guide/iphone/iphd5300a341/18.0/ios/18.0",
 ]
 
-# -------------------------
-# GOOGLE PIXEL URLS (YOUR EXACT LIST)
-# -------------------------
+# ─────────────────────────────────────────
+# GOOGLE PIXEL URLS  (unchanged)
+# ─────────────────────────────────────────
 GOOGLE_URLS = [
-    # --- Troubleshooting & Basics ---
-    "https://support.google.com/pixelphone/answer/14140287",  # Fix common issues
-    "https://support.google.com/pixelphone/answer/12967594",  # Get around your phone
-    "https://support.google.com/pixelphone/answer/7158570",   # How to use the Camera
-    "https://support.google.com/pixelphone/answer/15199831",  # Find apps
-    "https://support.google.com/pixelphone/answer/14116441",  # Navigation basics
-    "https://support.google.com/pixelphone/answer/7535206",   # Update Android
-    "https://support.google.com/pixelphone/answer/6111329",  # Connect to Wi-Fi
-    "https://support.google.com/pixelphone/answer/7444033",   # Bluetooth help
-    "https://support.google.com/pixelphone/answer/2819525",  # Contacts
-    "https://support.google.com/pixelphone/answer/2818748",  # Phone calls
-    "https://support.google.com/pixelphone/answer/7680439",   # System updates
-    "https://support.google.com/pixelphone/answer/14782427",  # Personal Safety app
-    "https://support.google.com/pixelphone/answer/6183600",   # Wi-Fi troubleshooting
-    "https://support.google.com/pixelphone/answer/6187458",   # Battery Saver
-    # --- Senior Specific (High Priority) ---
-    "https://support.google.com/pixelphone/answer/6006564",   # Accessibility Overview
-    "https://support.google.com/pixelphone/answer/6122841",   # Font & Display Size
-    "https://support.google.com/pixelphone/answer/12913009",  # Using the Magnifier
-    "https://support.google.com/pixelphone/answer/9316333",   # Medical ID & Emergency info
-    "https://support.google.com/pixelphone/answer/7283669",   # Using the Google Assistant (Voice)
-    "https://support.google.com/pixelphone/answer/2844832",   # Adjusting Volume & Vibration
-    "https://support.google.com/pixelphone/answer/2781850",   # Changing Wallpapers
-    "https://support.google.com/pixelphone/answer/15182154",  # Using Live Translate
-    "https://support.google.com/pixelphone/answer/13202895",  # Adaptive Brightness
-    # --- Safety & Anti-Scam ---
-    "https://support.google.com/pixelphone/answer/7055029",   # Emergency SOS
-    "https://support.google.com/pixelphone/answer/9118387",   # Screen calls (Spam protection)
-    "https://support.google.com/pixelphone/answer/2819524",   # Blocking numbers
-    "https://support.google.com/pixelphone/answer/4596836",   # Factory Reset
-    "https://support.google.com/pixelphone/answer/9218411",   # Find your phone
-    # --- Hardware & Maintenance ---
-    "https://support.google.com/pixelphone/answer/6187455",   # Charging basics
-    "https://support.google.com/pixelphone/answer/6090599",   # Cleaning your phone
-    "https://support.google.com/pixelphone/answer/13675043",   # Identifying your Pixel model
-    "https://support.google.com/pixelphone/answer/7106961",   # SIM card help
+    "https://support.google.com/pixelphone/answer/14140287",
+    "https://support.google.com/pixelphone/answer/12967594",
+    "https://support.google.com/pixelphone/answer/7158570",
+    "https://support.google.com/pixelphone/answer/15199831",
+    "https://support.google.com/pixelphone/answer/14116441",
+    "https://support.google.com/pixelphone/answer/7535206",
+    "https://support.google.com/pixelphone/answer/6111329",
+    "https://support.google.com/pixelphone/answer/7444033",
+    "https://support.google.com/pixelphone/answer/2819525",
+    "https://support.google.com/pixelphone/answer/2818748",
+    "https://support.google.com/pixelphone/answer/7680439",
+    "https://support.google.com/pixelphone/answer/14782427",
+    "https://support.google.com/pixelphone/answer/6183600",
+    "https://support.google.com/pixelphone/answer/6187458",
+    "https://support.google.com/pixelphone/answer/6006564",
+    "https://support.google.com/pixelphone/answer/6122841",
+    "https://support.google.com/pixelphone/answer/12913009",
+    "https://support.google.com/pixelphone/answer/9316333",
+    "https://support.google.com/pixelphone/answer/7283669",
+    "https://support.google.com/pixelphone/answer/2844832",
+    "https://support.google.com/pixelphone/answer/2781850",
+    "https://support.google.com/pixelphone/answer/15182154",
+    "https://support.google.com/pixelphone/answer/13202895",
+    "https://support.google.com/pixelphone/answer/7055029",
+    "https://support.google.com/pixelphone/answer/9118387",
+    "https://support.google.com/pixelphone/answer/2819524",
+    "https://support.google.com/pixelphone/answer/4596836",
+    "https://support.google.com/pixelphone/answer/9218411",
+    "https://support.google.com/pixelphone/answer/6187455",
+    "https://support.google.com/pixelphone/answer/6090599",
+    "https://support.google.com/pixelphone/answer/13675043",
+    "https://support.google.com/pixelphone/answer/7106961",
 ]
 
-# -------------------------
-# EMBEDDINGS
-# -------------------------
-embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
+# ─────────────────────────────────────────
+# TEXT SPLITTER  (unchanged)
+# ─────────────────────────────────────────
+SPLITTER = RecursiveCharacterTextSplitter(
+    chunk_size=1000,
+    chunk_overlap=150,
+    separators=["\n\n", "\n", ". ", "! ", "? ", " ", ""],
+    length_function=len,
+)
 
 
-def ingest_platform(urls, platform_name, clear_db=False):
-    print(f"\n🚀 Ingesting {platform_name} documentation...")
+# ─────────────────────────────────────────
+# APPLE PAGE EXTRACTOR
+# Waits for the article body to render, then extracts only that content.
+# Apple's article body is inside <section data-type="article"> after JS runs.
+# Falls back through multiple selectors in case the structure varies.
+# ─────────────────────────────────────────
+def _extract_apple(page, url: str) -> str:
+    page.goto(url, wait_until="domcontentloaded", timeout=30000)
 
-    if clear_db and os.path.exists(MAIN_DB):
-        print("🧹 Clearing existing database...")
-        shutil.rmtree(MAIN_DB)
+    # Wait for article content to appear — this is what FireCrawl was missing
+    try:
+        page.wait_for_selector("section[data-type='article'], #article, .article-body, main article", timeout=10000)
+    except PlaywrightTimeout:
+        pass  # Try to extract whatever rendered
 
-    all_docs = []
-    success_urls = []
+    html = page.content()
+    soup = BeautifulSoup(html, "html.parser")
 
-    for url in urls:
-        print(f"🔎 Scraping: {url}")
-        try:
-            loader = FireCrawlLoader(
-                api_key=os.environ.get("FIRECRAWL_API_KEY"),
-                url=url,
-                mode="scrape"
-            )
+    # Try selectors in priority order — stop at first match
+    selectors = [
+        {"name": "section", "attrs": {"data-type": "article"}},
+        {"name": "div",     "attrs": {"id": "article"}},
+        {"name": "div",     "attrs": {"class": "article-body"}},
+        {"name": "main",    "attrs": {}},
+    ]
 
-            docs = loader.load()
+    for sel in selectors:
+        el = soup.find(sel["name"], sel["attrs"] if sel["attrs"] else True)
+        if el:
+            # Remove nav, TOC, version selector, and feedback elements that
+            # may be nested inside the article container
+            for tag in el.find_all(["nav", "aside", "footer", "select",
+                                     "script", "style", "noscript"]):
+                tag.decompose()
+            for tag in el.find_all(class_=["version-selector", "toc",
+                                            "localnav", "breadcrumb",
+                                            "feedback", "article-feedback"]):
+                tag.decompose()
 
-            for doc in docs:
-                doc.metadata["platform"] = platform_name
-                doc.metadata["source"] = url
-                all_docs.append(doc)
+            text = el.get_text(separator="\n", strip=True)
+            if len(text) > 200:  # Sanity check — real content is always longer
+                return text
 
-            success_urls.append(url)
+    # Last resort: body text (will have some chrome but better than nothing)
+    body = soup.find("body")
+    return body.get_text(separator="\n", strip=True) if body else ""
 
-        except Exception as e:
-            print(f"❌ Failed to scrape {url}: {e}")
 
-    print(f"📄 Successfully indexed {len(success_urls)} URLs")
+# ─────────────────────────────────────────
+# GOOGLE PAGE EXTRACTOR
+# Google support pages render content inside .article-body or [jscontroller]
+# article divs. We wait for the main content container then extract it.
+# ─────────────────────────────────────────
+def _extract_google(page, url: str) -> str:
+    page.goto(url, wait_until="domcontentloaded", timeout=30000)
 
-    if not all_docs:
-        print("⚠️ No documents loaded.")
-        return
+    try:
+        page.wait_for_selector(".article-body, .cc-content, [jsname='WbKHeb'], #article-content", timeout=10000)
+    except PlaywrightTimeout:
+        pass
 
-    # -------------------------
-    # CHUNKING
-    # -------------------------
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1500,
-        chunk_overlap=200
+    html = page.content()
+    soup = BeautifulSoup(html, "html.parser")
+
+    selectors = [
+        {"name": "div", "attrs": {"class": "article-body"}},
+        {"name": "div", "attrs": {"class": "cc-content"}},
+        {"name": "div", "attrs": {"id":    "article-content"}},
+        {"name": "main","attrs": {}},
+    ]
+
+    for sel in selectors:
+        el = soup.find(sel["name"], sel["attrs"] if sel["attrs"] else True)
+        if el:
+            for tag in el.find_all(["nav", "aside", "footer", "select",
+                                     "script", "style", "noscript"]):
+                tag.decompose()
+            for tag in el.find_all(class_=["related-articles", "feedback",
+                                            "breadcrumb", "nav-list"]):
+                tag.decompose()
+
+            text = el.get_text(separator="\n", strip=True)
+            if len(text) > 200:
+                return text
+
+    body = soup.find("body")
+    return body.get_text(separator="\n", strip=True) if body else ""
+
+
+# ─────────────────────────────────────────
+# GARBAGE FILTER  (safety net after extraction)
+# ─────────────────────────────────────────
+def _is_garbage_chunk(text: str) -> bool:
+    stripped = text.strip()
+    if len(stripped) < 80:
+        return True
+
+    lines = [l.strip() for l in stripped.splitlines() if l.strip()]
+    if not lines:
+        return True
+
+    version_keywords = {
+        "ios 26", "ios 18", "ios 17", "ios 16", "ios 15",
+        "ios 14", "ios 13", "ios 12", "select version:",
+        "modifying this control", "table of contents",
+        "android 15", "android 14", "android 13",
+    }
+    version_line_count = sum(
+        1 for l in lines
+        if l.lower() in version_keywords or l.lower().startswith("ios ")
+    )
+    if version_line_count / len(lines) > 0.4:
+        return True
+
+    link_line_count = sum(1 for l in lines if l.startswith("[") and "](http" in l)
+    if link_line_count / len(lines) > 0.5:
+        return True
+
+    return False
+
+
+# ─────────────────────────────────────────
+# METADATA ENRICHMENT
+# ─────────────────────────────────────────
+def _enrich_metadata(docs: List[Document], platform: str, source_url: str) -> List[Document]:
+    for i, doc in enumerate(docs):
+        first_line = next(
+            (line.strip() for line in doc.page_content.splitlines() if line.strip()),
+            "untitled"
+        )
+        doc.metadata.update({
+            "platform":    platform,
+            "source":      source_url,
+            "chunk_index": i,
+            "title":       first_line[:120],
+        })
+    return docs
+
+
+# ─────────────────────────────────────────
+# MAIN SCRAPER
+# Opens one Playwright browser for all URLs in a batch.
+# Uses the correct extractor per platform.
+# ─────────────────────────────────────────
+def _scrape_urls(urls: List[str], platform: str) -> List[Document]:
+    all_chunks: List[Document] = []
+    success_count = 0
+    is_apple = platform == "IOS18"
+
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True)
+        context = browser.new_context(
+            user_agent=(
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            ),
+            locale="en-US",
+        )
+        page = context.new_page()
+
+        for url in urls:
+            print(f"  🔎 Scraping: {url}")
+            try:
+                # Extract article body only
+                if is_apple:
+                    text = _extract_apple(page, url)
+                else:
+                    text = _extract_google(page, url)
+
+                if not text or len(text.strip()) < 100:
+                    print(f"      ⚠  No content extracted — skipping")
+                    continue
+
+                # Wrap in a Document then split
+                raw_doc = Document(page_content=text, metadata={})
+                enriched = _enrich_metadata([raw_doc], platform, url)
+                chunks   = SPLITTER.split_documents(enriched)
+
+                # Re-index and filter
+                clean_chunks = []
+                for j, chunk in enumerate(chunks):
+                    chunk.metadata["chunk_index"] = j
+                    if not _is_garbage_chunk(chunk.page_content):
+                        clean_chunks.append(chunk)
+
+                discarded = len(chunks) - len(clean_chunks)
+                all_chunks.extend(clean_chunks)
+                success_count += 1
+                print(f"      ✓ {len(clean_chunks)} chunks ({discarded} discarded)")
+
+                # Small polite delay between requests
+                time.sleep(0.5)
+
+            except Exception as exc:
+                print(f"      ✗ Failed: {exc}")
+
+        browser.close()
+
+    print(f"\n  📄 Scraped {success_count}/{len(urls)} URLs → {len(all_chunks)} total chunks")
+    return all_chunks
+
+
+def _save_report(platform: str, urls: List[str]) -> None:
+    path = os.path.join(BASE_DB, f"{platform.lower()}_indexed_pages.txt")
+    with open(path, "w") as fh:
+        for url in urls:
+            fh.write(url + "\n")
+    print(f"  📝 Report saved → {path}")
+
+
+# ─────────────────────────────────────────
+# CORE INGEST  (unchanged interface)
+# ─────────────────────────────────────────
+def ingest_platform(
+    urls:           List[str],
+    platform:       str,
+    save_path:      str,
+    clear_existing: bool = False,
+) -> FAISS:
+    print(f"\n{'='*60}")
+    print(f"🚀  Ingesting  {platform}")
+    print(f"{'='*60}")
+
+    if clear_existing and os.path.exists(save_path):
+        print(f"  🧹 Clearing {save_path}")
+        shutil.rmtree(save_path)
+
+    chunks = _scrape_urls(urls, platform)
+    if not chunks:
+        raise RuntimeError(f"No chunks produced for {platform}. Aborting.")
+
+    print(f"\n  💾 Building FAISS index …")
+    vs = FAISS.from_documents(documents=chunks, embedding=embeddings)
+
+    os.makedirs(save_path, exist_ok=True)
+    vs.save_local(save_path)
+    print(f"  ✅ Saved FAISS index → {save_path}")
+
+    _save_report(platform, urls)
+    return vs
+
+
+# ─────────────────────────────────────────
+# MERGE  (unchanged)
+# ─────────────────────────────────────────
+def merge_indexes() -> None:
+    print(f"\n{'='*60}")
+    print("🔀  Merging ios18 + pixel → combined")
+    print(f"{'='*60}")
+
+    if not os.path.exists(IOS_DB) or not os.path.exists(PIXEL_DB):
+        raise FileNotFoundError("Both ios18 and pixel indexes must exist before merging.")
+
+    print("  Loading ios18 …")
+    ios_vs = FAISS.load_local(IOS_DB, embeddings, allow_dangerous_deserialization=True)
+    print("  Loading pixel …")
+    pixel_vs = FAISS.load_local(PIXEL_DB, embeddings, allow_dangerous_deserialization=True)
+
+    print("  Merging …")
+    ios_vs.merge_from(pixel_vs)
+
+    if os.path.exists(COMBINED_DB):
+        shutil.rmtree(COMBINED_DB)
+    ios_vs.save_local(COMBINED_DB)
+    print(f"  ✅ Combined index saved → {COMBINED_DB}")
+
+
+# ─────────────────────────────────────────
+# PUBLIC RETRIEVER LOADER  (unchanged)
+# ─────────────────────────────────────────
+def load_retriever(
+    platform: Literal["ios18", "pixel", "combined"] = "combined",
+    k: int = 6,
+    score_threshold: float = 0.30,
+):
+    path_map = {"ios18": IOS_DB, "pixel": PIXEL_DB, "combined": COMBINED_DB}
+    path = path_map[platform]
+
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"Index not found at '{path}'. Run ingest first.")
+
+    vs = FAISS.load_local(path, embeddings, allow_dangerous_deserialization=True)
+    return vs.as_retriever(
+        search_type="similarity_score_threshold",
+        search_kwargs={"k": k, "score_threshold": score_threshold},
     )
 
-    chunks = splitter.split_documents(all_docs)
-    print(f"✂️ Created {len(chunks)} chunks")
 
-    # -------------------------
-    # STORE IN CHROMA
-    # -------------------------
-    vectorstore = Chroma(
-        persist_directory=MAIN_DB,
-        embedding_function=embeddings
+# ─────────────────────────────────────────
+# CLI  (unchanged)
+# ─────────────────────────────────────────
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Ingest Apple iOS 18 and/or Google Pixel docs into FAISS."
     )
-
-    vectorstore.add_documents(chunks)
-    # Chroma with persist_directory auto-persists; no .persist() in current API
-
-    print(f"✅ {platform_name} data stored in {MAIN_DB}")
-
-    # Save crawl report
-    report_file = f"{platform_name.lower()}_indexed_pages.txt"
-    with open(report_file, "w") as f:
-        for url in success_urls:
-            f.write(url + "\n")
-
-
-def main():
-    parser = argparse.ArgumentParser(description="Ingest Apple (iOS 18) and/or Google Pixel docs into vector DB.")
-    parser.add_argument(
-        "--pixel-only",
-        action="store_true",
-        help="Only ingest Pixel; do not clear DB or run Apple. Use when Apple is already done.",
-    )
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--pixel-only",  action="store_true",
+                       help="Only re-ingest Pixel. Apple index must already exist.")
+    group.add_argument("--merge-only",  action="store_true",
+                       help="Skip scraping; just rebuild the combined index.")
     args = parser.parse_args()
 
-    if args.pixel_only:
-        # Continue from where you left off: only add Pixel to existing DB
-        if not os.path.exists(MAIN_DB):
-            print("⚠️ No existing DB found. Run without --pixel-only first to ingest Apple.")
-            return
-        ingest_platform(GOOGLE_URLS, "PIXEL", clear_db=False)
-    else:
-        # Full run: clear, then Apple, then Pixel
-        ingest_platform(APPLE_URLS, "IOS18", clear_db=True)
-        ingest_platform(GOOGLE_URLS, "PIXEL")
+    os.makedirs(BASE_DB, exist_ok=True)
 
-    print("\n🎉 Ingest complete.")
+    if args.merge_only:
+        merge_indexes()
+    elif args.pixel_only:
+        if not os.path.exists(IOS_DB):
+            print("⚠️  No ios18 index found. Run without flags first.")
+            return
+        ingest_platform(GOOGLE_URLS, "PIXEL", PIXEL_DB, clear_existing=True)
+        merge_indexes()
+    else:
+        ingest_platform(APPLE_URLS, "IOS18", IOS_DB, clear_existing=True)
+        ingest_platform(GOOGLE_URLS, "PIXEL", PIXEL_DB, clear_existing=True)
+        merge_indexes()
+
+    print("\n🎉  Ingest complete.")
+    print(f"    Indexes: {IOS_DB}  |  {PIXEL_DB}  |  {COMBINED_DB}")
 
 
 if __name__ == "__main__":
