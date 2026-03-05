@@ -157,10 +157,35 @@ APPLE_URLS = [
     "https://support.apple.com/en-in/guide/iphone/iph02f94fc1c/18.0/ios/18.0",
     "https://support.apple.com/en-in/guide/iphone/iphe0990f7bb/18.0/ios/18.0",
     "https://support.apple.com/en-in/guide/iphone/iphd5300a341/18.0/ios/18.0",
+    # Appended (also in APPLE_URLS_APPEND for --append-ios)
+    "https://support.apple.com/en-in/guide/iphone/iph841379c3d/26/ios/18",
+    "https://support.apple.com/en-in/guide/iphone/iphb71f9b54d/26/ios/18",
+    "https://support.apple.com/en-in/guide/iphone/iphf574afb44/26/ios/18",
+    "https://support.apple.com/en-in/guide/iphone/iph81c7fd7d1/26/ios/18",
+    "https://support.apple.com/en-in/guide/iphone/iphca3d8b4e3/26/ios/18",
+    "https://support.apple.com/en-in/guide/iphone/iph1a1f981ad/26/ios/18",
+    "https://support.apple.com/en-in/guide/iphone/iph83bfec492/26/ios/18",
+    "https://support.apple.com/en-in/guide/iphone/iph9374b7411/ios",
+    "https://support.apple.com/en-in/guide/iphone/iph37c04838/ios",
+    "https://support.apple.com/en-in/guide/iphone/iph3d267104/ios",
+]
+
+# Additional Apple URLs to append to existing index (scrape only these when using --append-ios)
+APPLE_URLS_APPEND = [
+    "https://support.apple.com/en-in/guide/iphone/iph841379c3d/26/ios/18",
+    "https://support.apple.com/en-in/guide/iphone/iphb71f9b54d/26/ios/18",
+    "https://support.apple.com/en-in/guide/iphone/iphf574afb44/26/ios/18",
+    "https://support.apple.com/en-in/guide/iphone/iph81c7fd7d1/26/ios/18",
+    "https://support.apple.com/en-in/guide/iphone/iphca3d8b4e3/26/ios/18",
+    "https://support.apple.com/en-in/guide/iphone/iph1a1f981ad/26/ios/18",
+    "https://support.apple.com/en-in/guide/iphone/iph83bfec492/26/ios/18",
+    "https://support.apple.com/en-in/guide/iphone/iph9374b7411/ios",
+    "https://support.apple.com/en-in/guide/iphone/iph37c04838/ios",
+    "https://support.apple.com/en-in/guide/iphone/iph3d267104/ios",
 ]
 
 # ─────────────────────────────────────────
-# GOOGLE PIXEL URLS  (unchanged)
+# GOOGLE PIXEL URLS
 # ─────────────────────────────────────────
 GOOGLE_URLS = [
     "https://support.google.com/pixelphone/answer/14140287",
@@ -195,6 +220,21 @@ GOOGLE_URLS = [
     "https://support.google.com/pixelphone/answer/6090599",
     "https://support.google.com/pixelphone/answer/13675043",
     "https://support.google.com/pixelphone/answer/7106961",
+    # Appended (also in GOOGLE_URLS_APPEND for --append-pixel)
+    "https://support.google.com/pixelphone/answer/2819519?hl=en&ref_topic=7083814",
+    "https://support.google.com/pixelphone/answer/2819577?hl=en&ref_topic=7083814",
+    "https://support.google.com/pixelphone/answer/7289143?hl=en&ref_topic=7083814",
+    "https://support.google.com/pixelphone/answer/7109524?hl=en&ref_topic=7083814",
+    "https://support.google.com/pixelphone/?hl=en#topic=7083814",
+]
+
+# Additional Pixel URLs to append to existing index (scrape only these when using --append-pixel)
+GOOGLE_URLS_APPEND = [
+    "https://support.google.com/pixelphone/answer/2819519?hl=en&ref_topic=7083814",
+    "https://support.google.com/pixelphone/answer/2819577?hl=en&ref_topic=7083814",
+    "https://support.google.com/pixelphone/answer/7289143?hl=en&ref_topic=7083814",
+    "https://support.google.com/pixelphone/answer/7109524?hl=en&ref_topic=7083814",
+    "https://support.google.com/pixelphone/?hl=en#topic=7083814",
 ]
 
 # ─────────────────────────────────────────
@@ -452,6 +492,98 @@ def ingest_platform(
 
 
 # ─────────────────────────────────────────
+# APPEND APPLE URLS  (scrape only new URLs, merge into existing ios18)
+# ─────────────────────────────────────────
+def _append_apple_urls() -> None:
+    if not os.path.exists(IOS_DB):
+        raise FileNotFoundError(
+            f"ios18 index not found at {IOS_DB}. Run full ingest first (no flags)."
+        )
+
+    print(f"\n{'='*60}")
+    print("📎  Appending Apple URLs to existing ios18 index")
+    print(f"{'='*60}")
+    print(f"  URLs to scrape: {len(APPLE_URLS_APPEND)}")
+
+    chunks = _scrape_urls(APPLE_URLS_APPEND, "IOS18")
+    if not chunks:
+        print("  ⚠ No chunks produced; index unchanged.")
+        return
+
+    print(f"\n  📂 Loading existing ios18 index …")
+    existing_vs = FAISS.load_local(IOS_DB, embeddings, allow_dangerous_deserialization=True)
+    print(f"  🔨 Building small index from new chunks …")
+    new_vs = FAISS.from_documents(documents=chunks, embedding=embeddings)
+    print(f"  🔀 Merging new docs into ios18 …")
+    existing_vs.merge_from(new_vs)
+    existing_vs.save_local(IOS_DB)
+    print(f"  ✅ Saved updated ios18 index → {IOS_DB}")
+
+    # Append new URLs to indexed_pages report
+    report_path = os.path.join(BASE_DB, "ios18_indexed_pages.txt")
+    existing = []
+    if os.path.exists(report_path):
+        with open(report_path) as f:
+            existing = [line.strip() for line in f if line.strip()]
+    with open(report_path, "w") as f:
+        for u in existing:
+            f.write(u + "\n")
+        for u in APPLE_URLS_APPEND:
+            f.write(u + "\n")
+    print(f"  📝 Report updated → {report_path}")
+
+    print("\n  🔀 Rebuilding combined index …")
+    merge_indexes()
+    print("\n🎉  Append complete.")
+
+
+# ─────────────────────────────────────────
+# APPEND PIXEL URLS  (scrape only new URLs, merge into existing pixel)
+# ─────────────────────────────────────────
+def _append_pixel_urls() -> None:
+    if not os.path.exists(PIXEL_DB):
+        raise FileNotFoundError(
+            f"pixel index not found at {PIXEL_DB}. Run full ingest first (no flags or --pixel-only)."
+        )
+
+    print(f"\n{'='*60}")
+    print("📎  Appending Pixel URLs to existing pixel index")
+    print(f"{'='*60}")
+    print(f"  URLs to scrape: {len(GOOGLE_URLS_APPEND)}")
+
+    chunks = _scrape_urls(GOOGLE_URLS_APPEND, "PIXEL")
+    if not chunks:
+        print("  ⚠ No chunks produced; index unchanged.")
+        return
+
+    print(f"\n  📂 Loading existing pixel index …")
+    existing_vs = FAISS.load_local(PIXEL_DB, embeddings, allow_dangerous_deserialization=True)
+    print(f"  🔨 Building small index from new chunks …")
+    new_vs = FAISS.from_documents(documents=chunks, embedding=embeddings)
+    print(f"  🔀 Merging new docs into pixel …")
+    existing_vs.merge_from(new_vs)
+    existing_vs.save_local(PIXEL_DB)
+    print(f"  ✅ Saved updated pixel index → {PIXEL_DB}")
+
+    # Append new URLs to indexed_pages report
+    report_path = os.path.join(BASE_DB, "pixel_indexed_pages.txt")
+    existing = []
+    if os.path.exists(report_path):
+        with open(report_path) as f:
+            existing = [line.strip() for line in f if line.strip()]
+    with open(report_path, "w") as f:
+        for u in existing:
+            f.write(u + "\n")
+        for u in GOOGLE_URLS_APPEND:
+            f.write(u + "\n")
+    print(f"  📝 Report updated → {report_path}")
+
+    print("\n  🔀 Rebuilding combined index …")
+    merge_indexes()
+    print("\n🎉  Pixel append complete.")
+
+
+# ─────────────────────────────────────────
 # MERGE  (unchanged)
 # ─────────────────────────────────────────
 def merge_indexes() -> None:
@@ -509,12 +641,20 @@ def main() -> None:
                        help="Only re-ingest Pixel. Apple index must already exist.")
     group.add_argument("--merge-only",  action="store_true",
                        help="Skip scraping; just rebuild the combined index.")
+    group.add_argument("--append-ios",  action="store_true",
+                       help="Append APPLE_URLS_APPEND to existing ios18 index (no full re-scrape).")
+    group.add_argument("--append-pixel",  action="store_true",
+                       help="Append GOOGLE_URLS_APPEND to existing pixel index (no full re-scrape).")
     args = parser.parse_args()
 
     os.makedirs(BASE_DB, exist_ok=True)
 
     if args.merge_only:
         merge_indexes()
+    elif args.append_ios:
+        _append_apple_urls()
+    elif args.append_pixel:
+        _append_pixel_urls()
     elif args.pixel_only:
         if not os.path.exists(IOS_DB):
             print("⚠️  No ios18 index found. Run without flags first.")

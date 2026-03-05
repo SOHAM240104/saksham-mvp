@@ -3,6 +3,7 @@ import os
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_community.vectorstores import FAISS
+from langchain_community.retrievers import BM25Retriever
 from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
 from langchain_core.messages import SystemMessage
 from langchain_core.prompts import HumanMessagePromptTemplate
@@ -65,7 +66,7 @@ PLATFORM_APPLE  = "IOS18"
 PLATFORM_GOOGLE = "PIXEL"
 MAX_INPUT_LENGTH = 2000
 HISTORY_WINDOW   = 8
-RETRIEVAL_K      = 5
+RETRIEVAL_K      = 8
 REFUSAL_PHRASE   = "I couldn't find this information in the available sources."
 ENABLE_GROUNDING_CHECK = False
 
@@ -111,43 +112,6 @@ def load_vectorstore(db_path):
 
 
 # -------------------------
-# QUERY REWRITER
-# -------------------------
-@st.cache_data(show_spinner=False)
-def rewrite_query(user_message: str, platform: str) -> str:
-    if platform == PLATFORM_APPLE:
-        platform_hint = "iPhone iOS 18"
-    elif platform == PLATFORM_GOOGLE:
-        platform_hint = "Google Pixel Android"
-    else:
-        platform_hint = "iPhone iOS 18 OR Google Pixel Android"
-
-    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
-    system = (
-        "You are a search query expander for a phone support knowledge base. "
-        "Your only job: rewrite the user's message into a clear, specific search query "
-        "that retrieves the most relevant documentation from a vector database. "
-        "Rules: expand abbreviations, infer intent from short or vague messages, "
-        "add relevant synonyms and related feature names, include the platform. "
-        "Return ONLY the rewritten query — no explanation, no extra text."
-    )
-    human = (
-        f"Platform: {platform_hint}\n"
-        f"User message: {user_message}\n\n"
-        "Rewritten search query:"
-    )
-    try:
-        result = llm.invoke([
-            {"role": "system", "content": system},
-            {"role": "user",   "content": human},
-        ])
-        rewritten = result.content.strip()
-        return rewritten if rewritten else user_message
-    except Exception:
-        return user_message
-
-
-# -------------------------
 # PLATFORM FILTERED RETRIEVER
 # Defined at module level — not inside build_chain — so it's clean and reusable.
 # -------------------------
@@ -162,6 +126,51 @@ class PlatformFilteredRetriever(BaseRetriever):
     ) -> List[Document]:
         docs = self.base.invoke(query)
         return [d for d in docs if d.metadata.get("platform") == self.platform]
+
+
+class HybridEnsembleRetriever(BaseRetriever):
+    """Simple reciprocal-rank-fusion ensemble over multiple retrievers."""
+
+    retrievers: List[BaseRetriever]
+    weights: List[float] | None = None
+    k: int = RETRIEVAL_K
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    def _get_relevant_documents(
+        self, query: str, *, run_manager: CallbackManagerForRetrieverRun
+    ) -> List[Document]:
+        from collections import defaultdict
+
+        scores: dict[tuple, float] = defaultdict(float)
+        docs_by_key: dict[tuple, Document] = {}
+        c = 60.0  # RRF constant
+
+        for idx, retriever in enumerate(self.retrievers):
+            weight = 1.0
+            if self.weights and idx < len(self.weights):
+                weight = float(self.weights[idx])
+
+            try:
+                results = retriever.invoke(query)
+            except Exception:
+                continue
+
+            for rank, doc in enumerate(results):
+                key = (
+                    doc.metadata.get("source"),
+                    doc.page_content,
+                )
+                if key not in docs_by_key:
+                    docs_by_key[key] = doc
+                scores[key] += weight * (1.0 / (rank + 1 + c))
+
+        if not scores:
+            return []
+
+        sorted_keys = sorted(scores.keys(), key=lambda k: scores[k], reverse=True)
+        top_docs = [docs_by_key[k] for k in sorted_keys[: self.k]]
+        return top_docs
 
 
 # -------------------------
@@ -198,7 +207,31 @@ def build_chain(_vectorstore, _system_prompt, platform_filter=None):
         document_separator="\n\n---\n\n",
     )
 
-    base_retriever = _vectorstore.as_retriever(search_kwargs={"k": RETRIEVAL_K})
+    similarity_retriever = _vectorstore.as_retriever(
+        search_type="similarity",
+        search_kwargs={"k": RETRIEVAL_K},
+    )
+    mmr_retriever = _vectorstore.as_retriever(
+        search_type="mmr",
+        search_kwargs={"k": RETRIEVAL_K, "fetch_k": RETRIEVAL_K * 4},
+    )
+
+    # Build a BM25 (sparse) retriever from all documents in the FAISS docstore, if available.
+    bm25_retriever = None
+    try:
+        all_doc_ids = list(_vectorstore.index_to_docstore_id.values())
+        all_docs = _vectorstore.docstore.mget(all_doc_ids)
+        all_docs = [d for d in all_docs if d is not None]
+        if all_docs:
+            bm25_retriever = BM25Retriever.from_documents(all_docs)
+    except Exception:
+        bm25_retriever = None
+
+    retrievers = [similarity_retriever, mmr_retriever]
+    if bm25_retriever is not None:
+        retrievers.append(bm25_retriever)
+
+    base_retriever = HybridEnsembleRetriever(retrievers=retrievers)
 
     if platform_filter is not None:
         retriever = PlatformFilteredRetriever(base=base_retriever, platform=platform_filter)
@@ -339,25 +372,6 @@ def render_sources(docs: list):
                 unsafe_allow_html=True,
             )
 
-            content = doc.page_content.strip()
-            st.markdown(
-                f"""
-                <div style='
-                    background:#ffffff;
-                    border:1px solid #e0e0e0;
-                    border-top:none;
-                    border-radius:0 0 8px 8px;
-                    padding:12px 16px;
-                    font-size:0.84em;
-                    color:#444;
-                    line-height:1.65;
-                    white-space:pre-wrap;
-                    margin-bottom:14px;
-                '>{content}</div>
-                """,
-                unsafe_allow_html=True,
-            )
-
 
 # -------------------------
 # GROUNDING CHECK (optional)
@@ -461,7 +475,7 @@ def main():
     effective_filter    = st.session_state.last_platform
     platform_for_prompt = effective_filter if effective_filter is not None else "NOT_CONFIRMED"
 
-    search_query = rewrite_query(user_input, platform_for_prompt)
+    search_query = user_input
 
     retriever, combine_chain = build_chain(
         vectorstore, system_prompt, platform_filter=effective_filter
