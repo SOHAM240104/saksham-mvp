@@ -3,13 +3,14 @@ import os
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_community.vectorstores import FAISS
-from langchain_community.retrievers import BM25Retriever
 from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
 from langchain_core.messages import SystemMessage
 from langchain_core.prompts import HumanMessagePromptTemplate
 from langchain_core.retrievers import BaseRetriever
 from langchain_core.documents import Document
 from langchain_core.callbacks import CallbackManagerForRetrieverRun
+from langchain_core.tools import tool
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage
 from langchain_classic.chains.combine_documents import create_stuff_documents_chain
 from pydantic import ConfigDict
 from typing import List
@@ -70,7 +71,6 @@ RETRIEVAL_K      = 8
 REFUSAL_PHRASE   = "I couldn't find this information in the available sources."
 ENABLE_GROUNDING_CHECK = False
 
-
 # -------------------------
 # DB PATH RESOLVER
 # -------------------------
@@ -86,7 +86,6 @@ def _get_db_path():
 # -------------------------
 # SYSTEM PROMPT LOADER
 # -------------------------
-@st.cache_data
 def load_system_prompt():
     path = os.path.join(_APP_DIR, "system_prompt.txt")
     if not os.path.exists(path):
@@ -99,7 +98,6 @@ def load_system_prompt():
 # -------------------------
 # VECTORSTORE LOADER
 # -------------------------
-@st.cache_resource
 def load_vectorstore(db_path):
     if not os.path.exists(db_path):
         return None
@@ -128,55 +126,23 @@ class PlatformFilteredRetriever(BaseRetriever):
         return [d for d in docs if d.metadata.get("platform") == self.platform]
 
 
-class HybridEnsembleRetriever(BaseRetriever):
-    """Simple reciprocal-rank-fusion ensemble over multiple retrievers."""
-
-    retrievers: List[BaseRetriever]
-    weights: List[float] | None = None
-    k: int = RETRIEVAL_K
-
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-
-    def _get_relevant_documents(
-        self, query: str, *, run_manager: CallbackManagerForRetrieverRun
-    ) -> List[Document]:
-        from collections import defaultdict
-
-        scores: dict[tuple, float] = defaultdict(float)
-        docs_by_key: dict[tuple, Document] = {}
-        c = 60.0  # RRF constant
-
-        for idx, retriever in enumerate(self.retrievers):
-            weight = 1.0
-            if self.weights and idx < len(self.weights):
-                weight = float(self.weights[idx])
-
-            try:
-                results = retriever.invoke(query)
-            except Exception:
-                continue
-
-            for rank, doc in enumerate(results):
-                key = (
-                    doc.metadata.get("source"),
-                    doc.page_content,
-                )
-                if key not in docs_by_key:
-                    docs_by_key[key] = doc
-                scores[key] += weight * (1.0 / (rank + 1 + c))
-
-        if not scores:
-            return []
-
-        sorted_keys = sorted(scores.keys(), key=lambda k: scores[k], reverse=True)
-        top_docs = [docs_by_key[k] for k in sorted_keys[: self.k]]
-        return top_docs
+# -------------------------
+# BUILD RETRIEVER (MMR only — used by search_support_docs tool)
+# -------------------------
+def build_retriever(_vectorstore, platform_filter=None):
+    """Build MMR retriever. Used by search_support_docs tool."""
+    mmr_retriever = _vectorstore.as_retriever(
+        search_type="mmr",
+        search_kwargs={"k": RETRIEVAL_K, "fetch_k": RETRIEVAL_K * 4, "lambda_mult": 0.5},
+    )
+    if platform_filter is not None:
+        return PlatformFilteredRetriever(base=mmr_retriever, platform=platform_filter)
+    return mmr_retriever
 
 
 # -------------------------
-# BUILD CHAIN
+# BUILD CHAIN (kept for any non-agent use)
 # -------------------------
-@st.cache_resource
 def build_chain(_vectorstore, _system_prompt, platform_filter=None):
     llm = ChatOpenAI(
         model="gpt-4o-mini",
@@ -207,42 +173,52 @@ def build_chain(_vectorstore, _system_prompt, platform_filter=None):
         document_separator="\n\n---\n\n",
     )
 
-    similarity_retriever = _vectorstore.as_retriever(
-        search_type="similarity",
-        search_kwargs={"k": RETRIEVAL_K},
-    )
-    mmr_retriever = _vectorstore.as_retriever(
-        search_type="mmr",
-        search_kwargs={"k": RETRIEVAL_K, "fetch_k": RETRIEVAL_K * 4},
-    )
-
-    # Build a BM25 (sparse) retriever from all documents in the FAISS docstore, if available.
-    bm25_retriever = None
-    try:
-        all_doc_ids = list(_vectorstore.index_to_docstore_id.values())
-        all_docs = _vectorstore.docstore.mget(all_doc_ids)
-        all_docs = [d for d in all_docs if d is not None]
-        if all_docs:
-            bm25_retriever = BM25Retriever.from_documents(all_docs)
-    except Exception:
-        bm25_retriever = None
-
-    retrievers = [similarity_retriever, mmr_retriever]
-    if bm25_retriever is not None:
-        retrievers.append(bm25_retriever)
-
-    base_retriever = HybridEnsembleRetriever(retrievers=retrievers)
-
-    if platform_filter is not None:
-        retriever = PlatformFilteredRetriever(base=base_retriever, platform=platform_filter)
-    else:
-        retriever = base_retriever
-
+    retriever = build_retriever(_vectorstore, platform_filter)
     return (retriever, combine_docs_chain)
 
 
 # -------------------------
-# DEVICE DETECTION
+# SEARCH TOOL (for agent — retrieval only when LLM calls it)
+# -------------------------
+def make_search_tool(vectorstore, docs_container: dict):
+    """Return a LangChain tool that searches support docs. docs_container['docs'] is set when the tool runs (for UI sources)."""
+
+    @tool
+    def search_support_docs(query: str, platform: str = "") -> str:
+        """Search iPhone and Pixel support documentation. You MUST call this before giving ANY steps or how-to instructions (e.g. change ringtone, wallpaper, settings). The tool returns the only allowed source for your answer. Do NOT call for greetings, thanks, or scam mentions. query: the user's question or topic. platform: '' for both, or 'IOS18' for iPhone, 'PIXEL' for Pixel when the user has said which device."""
+        retriever = build_retriever(
+            vectorstore,
+            platform if platform in ("IOS18", "PIXEL") else None,
+        )
+        docs = retriever.invoke(query, config={"run_name": "search_support_docs"})
+        docs_container["docs"] = docs
+        if not docs:
+            return "No relevant documentation found."
+        for i, d in enumerate(docs, 1):
+            d.metadata["source_index"] = i
+        return "\n\n---\n\n".join([f"Source {i}:\n{d.page_content}" for i, d in enumerate(docs, 1)])
+
+    return search_support_docs
+
+
+# -------------------------
+# INFER PLATFORM FROM CONVERSATION (no stored state)
+# -------------------------
+def infer_platform_from_history(messages: list) -> str:
+    """Scan recent messages for device mention. Returns IOS18, PIXEL, or NOT_CONFIRMED."""
+    for m in reversed(messages):
+        if m.get("role") != "user":
+            continue
+        content = (m.get("content") or "").lower()
+        if "pixel" in content or "google" in content:
+            return PLATFORM_GOOGLE
+        if "iphone" in content or "apple" in content or "ios" in content:
+            return PLATFORM_APPLE
+    return "NOT_CONFIRMED"
+
+
+# -------------------------
+# DEVICE DETECTION (legacy helper, kept for compatibility)
 # -------------------------
 def get_platform_filter(text: str):
     if not text:
@@ -291,22 +267,33 @@ def response_used_rag(response: str, docs: list) -> bool:
 # -------------------------
 # SOURCE FORMATTER
 # Uses article title from metadata instead of URL filename.
+# Show more sources and rank by chunk count so ringtone / relevant pages appear.
 # -------------------------
-MAX_SOURCES_SHOWN = 5
+MAX_SOURCES_SHOWN = 10
 
 
 def render_sources(docs: list):
     if not docs:
         return
 
-    seen = set()
-    unique_docs = []
+    # Count chunks per source (URL); keep one doc per source for display
+    source_to_doc = {}
+    source_to_count = {}
     for doc in docs:
         src = doc.metadata.get("source", "")
-        if src not in seen:
-            seen.add(src)
-            unique_docs.append(doc)
-    unique_docs = unique_docs[:MAX_SOURCES_SHOWN]
+        if not src:
+            continue
+        if src not in source_to_doc:
+            source_to_doc[src] = doc
+        source_to_count[src] = source_to_count.get(src, 0) + 1
+
+    # Sort by chunk count descending so most-relevant sources (e.g. ringtone) show first
+    sorted_sources = sorted(
+        source_to_count.keys(),
+        key=lambda s: source_to_count[s],
+        reverse=True,
+    )
+    unique_docs = [source_to_doc[s] for s in sorted_sources[:MAX_SOURCES_SHOWN]]
 
     with st.expander(
         f"📄 {len(unique_docs)} source{'s' if len(unique_docs) > 1 else ''} referenced",
@@ -432,8 +419,6 @@ def main():
                 ),
             }
         ]
-    if "last_platform" not in st.session_state:
-        st.session_state.last_platform = None
 
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
@@ -467,54 +452,66 @@ def main():
         return
 
     system_prompt = load_system_prompt()
-
-    detected = get_platform_filter(user_input)
-    if detected is not None:
-        st.session_state.last_platform = detected
-
-    effective_filter    = st.session_state.last_platform
-    platform_for_prompt = effective_filter if effective_filter is not None else "NOT_CONFIRMED"
-
-    search_query = user_input
-
-    retriever, combine_chain = build_chain(
-        vectorstore, system_prompt, platform_filter=effective_filter
+    inferred_platform = infer_platform_from_history(st.session_state.messages)
+    tool_instruction = (
+        "\n\n## TOOL USE — MANDATORY FOR STEPS/HOW-TO\n"
+        "When the user asks how to do something on their phone (e.g. change ringtone, wallpaper, settings), "
+        "you MUST call the search_support_docs tool first. Use the query as the user's question and set platform to "
+        "'IOS18' or 'PIXEL' if the user has already said which device. Answer ONLY from the tool result. "
+        "Never give steps from memory — if you do not call the tool, do not give steps."
     )
-    history_text = build_history_text(st.session_state.messages)
+    system_with_platform = (
+        system_prompt
+        + tool_instruction
+        + "\n\nCurrent device context (use for steps and filtering): "
+        + inferred_platform
+    )
 
-    retrieved_docs = retriever.invoke(search_query)
-    for i, d in enumerate(retrieved_docs, 1):
-        d.metadata["source_index"] = i
+    # Build message list for the agent (system + history + latest user)
+    messages_lc = [SystemMessage(content=system_with_platform)]
+    for m in st.session_state.messages[1:]:
+        if m["role"] == "user":
+            messages_lc.append(HumanMessage(content=m["content"]))
+        else:
+            messages_lc.append(AIMessage(content=m["content"]))
+    messages_lc.append(HumanMessage(content=user_input))
+
+    docs_container = {}
+    search_tool = make_search_tool(vectorstore, docs_container)
+    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+    llm_with_tools = llm.bind_tools([search_tool])
 
     with st.chat_message("assistant"):
         response_placeholder = st.empty()
         full_response = ""
 
         try:
-            for chunk in combine_chain.stream({
-                "input":            user_input,
-                "history":          history_text,
-                "current_platform": platform_for_prompt,
-                "context":          retrieved_docs,
-            }):
-                if isinstance(chunk, str):
-                    full_response += chunk
-                    response_placeholder.markdown(full_response)
-                elif isinstance(chunk, dict) and "answer" in chunk:
-                    full_response += chunk["answer"]
-                    response_placeholder.markdown(full_response)
+            while True:
+                response = llm_with_tools.invoke(messages_lc)
+                messages_lc.append(response)
+
+                if not getattr(response, "tool_calls", None):
+                    full_response = response.content or ""
+                    break
+
+                for tc in response.tool_calls:
+                    name = tc.get("name", "search_support_docs")
+                    args = tc.get("args") or {}
+                    tool_call_id = tc.get("id", "")
+                    result = search_tool.invoke(args)
+                    messages_lc.append(
+                        ToolMessage(tool_call_id=tool_call_id, content=result)
+                    )
+
+            response_placeholder.markdown(full_response)
+            retrieved_docs = docs_container.get("docs", [])
+            if retrieved_docs:
+                render_sources(retrieved_docs)
 
         except Exception as e:
             st.error("Something went wrong while generating a response. Please try again.")
             st.exception(e)
             return
-
-        if ENABLE_GROUNDING_CHECK and retrieved_docs and full_response:
-            if not _is_answer_grounded(full_response, retrieved_docs):
-                full_response = REFUSAL_PHRASE
-                response_placeholder.markdown(full_response)
-
-        render_sources(retrieved_docs)
 
     st.session_state.messages.append({"role": "assistant", "content": full_response})
 
