@@ -31,7 +31,30 @@ def _apply_streamlit_secrets():
         pass
 
 
+def _enable_langsmith_tracing():
+    """Enable LangSmith tracing from env/secrets so it works locally and on Streamlit Cloud."""
+    api_key = os.environ.get("LANGSMITH_API_KEY", "").strip()
+    if not api_key:
+        return
+    os.environ["LANGSMITH_TRACING"] = "true"
+    try:
+        from langsmith import Client, configure
+
+        client = Client(
+            api_key=api_key,
+            api_url=os.environ.get("LANGSMITH_ENDPOINT", "https://api.smith.langchain.com"),
+        )
+        configure(
+            client=client,
+            project_name=os.environ.get("LANGSMITH_PROJECT") or "default",
+            enabled=True,
+        )
+    except Exception:
+        pass
+
+
 _apply_streamlit_secrets()
+_enable_langsmith_tracing()
 
 _APP_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -377,6 +400,10 @@ def build_history_text(messages: list) -> str:
 # MAIN APP
 # -------------------------
 def main():
+    # Re-apply secrets and tracing on every run (needed for Streamlit Cloud)
+    _apply_streamlit_secrets()
+    _enable_langsmith_tracing()
+
     st.set_page_config(page_title="Care Assistant", page_icon="💛")
     st.title("Care Assistant")
 
