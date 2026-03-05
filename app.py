@@ -10,6 +10,7 @@ from langchain_core.retrievers import BaseRetriever
 from langchain_core.documents import Document
 from langchain_core.callbacks import CallbackManagerForRetrieverRun
 from langchain_classic.chains.combine_documents import create_stuff_documents_chain
+from pydantic import ConfigDict
 from typing import List
 
 load_dotenv()
@@ -113,8 +114,7 @@ class PlatformFilteredRetriever(BaseRetriever):
     base: BaseRetriever
     platform: str
 
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def _get_relevant_documents(
         self, query: str, *, run_manager: CallbackManagerForRetrieverRun
