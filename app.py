@@ -15,6 +15,24 @@ from typing import List
 
 load_dotenv()
 
+# Use Streamlit secrets when available (Cloud or local .streamlit/secrets.toml)
+def _apply_streamlit_secrets():
+    try:
+        for key in (
+            "OPENAI_API_KEY",
+            "LANGSMITH_TRACING",
+            "LANGSMITH_API_KEY",
+            "LANGSMITH_PROJECT",
+            "LANGSMITH_ENDPOINT",
+        ):
+            if key in st.secrets and str(st.secrets.get(key)).strip():
+                os.environ[key] = str(st.secrets[key]).strip()
+    except Exception:
+        pass
+
+
+_apply_streamlit_secrets()
+
 _APP_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # -------------------------
