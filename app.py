@@ -273,7 +273,12 @@ def main():
 
     messages_lc = [SystemMessage(content=system_with_platform)] + history_lc
 
-    docs_container: dict = {}
+    # Persist docs_container across turns so that when support docs are fetched
+    # in any tool call, the latest docs are available for PDF generation.
+    docs_container: dict = st.session_state.get("docs_container", {})
+    if docs_container is None:
+        docs_container = {}
+
     search_tool = make_search_tool(vectorstore, docs_container, retriever_map=retriever_map)
     llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
     llm_with_tools = llm.bind_tools([search_tool])
@@ -308,6 +313,8 @@ def main():
             return
 
     st.session_state.messages.append({"role": "assistant", "content": full_response})
+    # Save latest docs_container for future turns
+    st.session_state["docs_container"] = docs_container
 
     # If search_support_docs was called and returned docs, show PDF (trust the tool stream).
     retrieved_docs = docs_container.get("docs", [])

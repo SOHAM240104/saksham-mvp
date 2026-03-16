@@ -2,84 +2,96 @@
 pdf_generator.py
 ================
 Generate a PDF of RAG sources. Used by Streamlit (app.py) for inline PDF.
-Returns Base64 for display; formatting is done locally (regex); no API calls.
-# Evolution API (server.py) integration commented out — Streamlit-only.
+This implementation renders via Markdown → HTML → WeasyPrint.
+Returns Base64 for display.
 """
+
 import base64
-import io
-import re
 from typing import List
 
-from fpdf import FPDF
+import markdown
+from weasyprint import HTML
 from langchain_core.documents import Document
-
-
-def _format_source_content(text: str) -> str:
-    """
-    Format raw RAG page_content for PDF: clean markdown images/links, normalize bullets.
-    Handles multiline markdown and empty links. All local (regex); no API calls.
-    """
-    if not text or not text.strip():
-        return text
-    # Allow newlines/whitespace between ] and ( so wrapped markdown still matches
-    _link_tail = r"\]\s*\(\s*[^)]+\)"
-    # Replace markdown images ![alt](url) with readable label (alt can be empty)
-    def _image_repl(m):
-        alt = (m.group(1) or "").strip()
-        return f"[Image: {alt}]" if alt else "[Image]"
-    text = re.sub(r"!\[([^\]]*)" + _link_tail, _image_repl, text, flags=re.DOTALL)
-    # Replace empty links [](url) so they don't show as raw
-    text = re.sub(r"\[\s*\]\s*\(\s*[^)]+\)", " ", text, flags=re.DOTALL)
-    # Replace markdown links [label](url) with just label (URL is in section header)
-    text = re.sub(r"\[([^\]]+)" + _link_tail, r"\1", text, flags=re.DOTALL)
-    # Normalize bullet lines: * or - at start of line -> hyphen
-    text = re.sub(r"^[\*\-]\s+", "- ", text, flags=re.MULTILINE)
-    # Collapse multiple spaces/newlines from removals
-    text = re.sub(r"[ \t]+", " ", text)
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip()
 
 
 def create_sources_pdf(docs: List[Document]) -> str:
     """
-    Build a PDF from LangChain Document objects (title, source URL, content).
+    Build a PDF from LangChain Document objects (title, source URL, content)
+    using a Markdown → HTML → WeasyPrint pipeline.
     Returns the PDF as a Base64-encoded string (Streamlit inline viewer).
     """
-    pdf = FPDF()
-    pdf.set_auto_page_break(auto=True, margin=15)
-    pdf.add_page()
-    pdf.set_font("Helvetica", size=10)
+    if not docs:
+        # Return an empty but valid PDF document
+        empty_html = "<html><body><p>No sources available.</p></body></html>"
+        pdf_bytes = HTML(string=empty_html).write_pdf()
+        return base64.b64encode(pdf_bytes).decode("ascii")
+
+    sections: List[str] = []
 
     for i, doc in enumerate(docs, 1):
         meta = doc.metadata or {}
-        title = (meta.get("title") or "").strip()
-        if not title or len(title) < 2:
-            title = meta.get("source", "") or f"Source {i}"
-        source_url = meta.get("source", "") or ""
+        raw_title = (meta.get("title") or "").strip()
+        title = raw_title or meta.get("source", "") or f"Source {i}"
+        url = meta.get("source", "") or ""
+        body = doc.page_content or ""
 
-        # Section header: number and title
-        pdf.set_font("Helvetica", "B", size=11)
-        pdf.multi_cell(0, 6, f"Source {i}: {title}", new_x="LMARGIN", new_y="NEXT")
-        pdf.set_font("Helvetica", size=9)
-        if source_url:
-            pdf.set_text_color(0, 0, 180)
-            pdf.multi_cell(0, 5, source_url, new_x="LMARGIN", new_y="NEXT", link=source_url)
-            pdf.set_text_color(0, 0, 0)
-        pdf.ln(2)
+        section_md = f"""## Source {i}: {title}
 
-        # Content: format for readability, then sanitize for Latin-1
-        text = _format_source_content(doc.page_content or "")
-        if text:
-            try:
-                text = text.encode("latin-1", errors="replace").decode("latin-1")
-            except Exception:
-                text = "".join(c if ord(c) < 256 else "?" for c in text)
-            pdf.set_font("Helvetica", size=9)
-            pdf.multi_cell(0, 5, text[:8000], new_x="LMARGIN", new_y="NEXT")  # cap per chunk
+{url}
 
-        pdf.ln(4)
+{body}
+"""
+        sections.append(section_md)
 
-    buffer = io.BytesIO()
-    pdf.output(buffer)
-    buffer.seek(0)
-    return base64.b64encode(buffer.getvalue()).decode("ascii")
+    markdown_text = "\n\n---\n\n".join(sections)
+
+    # Convert combined markdown to HTML
+    html_body = markdown.markdown(markdown_text)
+
+    # Wrap in a simple HTML template; let the browser-like renderer handle layout & images
+    html = f"""
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body {{
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+    font-size: 13px;
+    line-height: 1.5;
+    color: #111827;
+  }}
+  h1, h2, h3 {{
+    color: #111827;
+    margin-top: 0.8em;
+    margin-bottom: 0.4em;
+  }}
+  h2 {{
+    font-size: 1.1rem;
+  }}
+  p {{
+    margin: 0.2em 0 0.4em 0;
+  }}
+  ul, ol {{
+    margin: 0.2em 0 0.6em 1.2em;
+  }}
+  img {{
+    max-width: 500px;
+    height: auto;
+    margin: 0.4em 0;
+    display: block;
+  }}
+  hr {{
+    border: none;
+    border-top: 1px solid #e5e7eb;
+    margin: 0.8em 0;
+  }}
+</style>
+</head>
+<body>
+{html_body}
+</body>
+</html>
+"""
+
+    pdf_bytes = HTML(string=html).write_pdf()
+    return base64.b64encode(pdf_bytes).decode("ascii")
