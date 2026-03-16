@@ -1,27 +1,20 @@
 """
-ingest_faiss.py
-===============
-Ingests Apple iOS 18 and Google Pixel documentation into FAISS vector stores.
-Uses Playwright (headless Chromium) + BeautifulSoup to extract only the article
-body from each page — no nav, no version selectors, no TOC, no chrome.
+ingest.py
+=========
+Modern (2025–2026) ingestion pipeline for Saksham MVP:
+- Dynamic URL discovery via DuckDuckGo (optional --topic).
+- LLM-ready Markdown via Jina Reader API (no Playwright/BeautifulSoup).
+- Semantic chunking: MarkdownHeaderTextSplitter + RecursiveCharacterTextSplitter fallback.
+- FAISS vector store with metadata: source, platform, header_path.
 
-Storage layout (unchanged — fully compatible with existing app.py)
-------------------------------------------------------------------
-./care_vector_db/
-    ios18/      ← FAISS index for Apple only
-    pixel/      ← FAISS index for Pixel only
-    combined/   ← merged index (both platforms)
+Storage: ./care_vector_db/ios18 | pixel | combined
 
-Install dependencies (one-time)
---------------------------------
-    pip install playwright beautifulsoup4 langchain-community langchain-openai faiss-cpu
-    playwright install chromium
-
-Usage
------
-    python ingest_faiss.py                  # full ingest
-    python ingest_faiss.py --pixel-only     # re-ingest Pixel only
-    python ingest_faiss.py --merge-only     # rebuild combined from existing indexes
+Usage:
+  python ingest.py                     # full ingest (hardcoded URL lists)
+  python ingest.py --topic "ringtone"  # discover URLs for topic, ingest (append)
+  python ingest.py --pixel-only
+  python ingest.py --merge-only
+  python ingest.py --topic "battery" --pixel-only
 """
 
 import os
@@ -31,31 +24,33 @@ import time
 from typing import List, Literal
 
 from dotenv import load_dotenv
-from bs4 import BeautifulSoup
-from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
+import requests
 
 from langchain_community.vectorstores import FAISS
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_text_splitters import (
+    RecursiveCharacterTextSplitter,
+    MarkdownHeaderTextSplitter,
+)
 from langchain_openai import OpenAIEmbeddings
 from langchain_core.documents import Document
 
 load_dotenv()
 
 # ─────────────────────────────────────────
-# PATHS  (unchanged from original)
+# PATHS
 # ─────────────────────────────────────────
-BASE_DB     = "./care_vector_db"
-IOS_DB      = os.path.join(BASE_DB, "ios18")
-PIXEL_DB    = os.path.join(BASE_DB, "pixel")
+BASE_DB = "./care_vector_db"
+IOS_DB = os.path.join(BASE_DB, "ios18")
+PIXEL_DB = os.path.join(BASE_DB, "pixel")
 COMBINED_DB = os.path.join(BASE_DB, "combined")
 
 # ─────────────────────────────────────────
-# EMBEDDINGS  (unchanged)
+# EMBEDDINGS
 # ─────────────────────────────────────────
 embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
 
 # ─────────────────────────────────────────
-# APPLE iOS 18 URLS  (unchanged)
+# HARDCODED URL LISTS (fallback when no --topic)
 # ─────────────────────────────────────────
 APPLE_URLS = [
     "https://support.apple.com/en-in/guide/iphone/iph4fd8a0b89/18.0/ios/18.0",
@@ -157,36 +152,8 @@ APPLE_URLS = [
     "https://support.apple.com/en-in/guide/iphone/iph02f94fc1c/18.0/ios/18.0",
     "https://support.apple.com/en-in/guide/iphone/iphe0990f7bb/18.0/ios/18.0",
     "https://support.apple.com/en-in/guide/iphone/iphd5300a341/18.0/ios/18.0",
-    # Appended (also in APPLE_URLS_APPEND for --append-ios)
-    "https://support.apple.com/en-in/guide/iphone/iph841379c3d/26/ios/18",
-    "https://support.apple.com/en-in/guide/iphone/iphb71f9b54d/26/ios/18",
-    "https://support.apple.com/en-in/guide/iphone/iphf574afb44/26/ios/18",
-    "https://support.apple.com/en-in/guide/iphone/iph81c7fd7d1/26/ios/18",
-    "https://support.apple.com/en-in/guide/iphone/iphca3d8b4e3/26/ios/18",
-    "https://support.apple.com/en-in/guide/iphone/iph1a1f981ad/26/ios/18",
-    "https://support.apple.com/en-in/guide/iphone/iph83bfec492/26/ios/18",
-    "https://support.apple.com/en-in/guide/iphone/iph9374b7411/ios",
-    "https://support.apple.com/en-in/guide/iphone/iph37c04838/ios",
-    "https://support.apple.com/en-in/guide/iphone/iph3d267104/ios",
 ]
 
-# Additional Apple URLs to append to existing index (scrape only these when using --append-ios)
-APPLE_URLS_APPEND = [
-    "https://support.apple.com/en-in/guide/iphone/iph841379c3d/26/ios/18",
-    "https://support.apple.com/en-in/guide/iphone/iphb71f9b54d/26/ios/18",
-    "https://support.apple.com/en-in/guide/iphone/iphf574afb44/26/ios/18",
-    "https://support.apple.com/en-in/guide/iphone/iph81c7fd7d1/26/ios/18",
-    "https://support.apple.com/en-in/guide/iphone/iphca3d8b4e3/26/ios/18",
-    "https://support.apple.com/en-in/guide/iphone/iph1a1f981ad/26/ios/18",
-    "https://support.apple.com/en-in/guide/iphone/iph83bfec492/26/ios/18",
-    "https://support.apple.com/en-in/guide/iphone/iph9374b7411/ios",
-    "https://support.apple.com/en-in/guide/iphone/iph37c04838/ios",
-    "https://support.apple.com/en-in/guide/iphone/iph3d267104/ios",
-]
-
-# ─────────────────────────────────────────
-# GOOGLE PIXEL URLS
-# ─────────────────────────────────────────
 GOOGLE_URLS = [
     "https://support.google.com/pixelphone/answer/14140287",
     "https://support.google.com/pixelphone/answer/12967594",
@@ -220,140 +187,152 @@ GOOGLE_URLS = [
     "https://support.google.com/pixelphone/answer/6090599",
     "https://support.google.com/pixelphone/answer/13675043",
     "https://support.google.com/pixelphone/answer/7106961",
-    # Appended (also in GOOGLE_URLS_APPEND for --append-pixel)
-    "https://support.google.com/pixelphone/answer/2819519?hl=en&ref_topic=7083814",
-    "https://support.google.com/pixelphone/answer/2819577?hl=en&ref_topic=7083814",
-    "https://support.google.com/pixelphone/answer/7289143?hl=en&ref_topic=7083814",
-    "https://support.google.com/pixelphone/answer/7109524?hl=en&ref_topic=7083814",
-    "https://support.google.com/pixelphone/?hl=en#topic=7083814",
-]
-
-# Additional Pixel URLs to append to existing index (scrape only these when using --append-pixel)
-GOOGLE_URLS_APPEND = [
-    "https://support.google.com/pixelphone/answer/2819519?hl=en&ref_topic=7083814",
-    "https://support.google.com/pixelphone/answer/2819577?hl=en&ref_topic=7083814",
-    "https://support.google.com/pixelphone/answer/7289143?hl=en&ref_topic=7083814",
-    "https://support.google.com/pixelphone/answer/7109524?hl=en&ref_topic=7083814",
-    "https://support.google.com/pixelphone/?hl=en#topic=7083814",
 ]
 
 # ─────────────────────────────────────────
-# TEXT SPLITTER  (unchanged)
+# DYNAMIC URL DISCOVERY (DuckDuckGo)
 # ─────────────────────────────────────────
-SPLITTER = RecursiveCharacterTextSplitter(
-    chunk_size=1000,
-    chunk_overlap=150,
+def discover_support_urls(topic: str, platform: str) -> List[str]:
+    """Discover up to 5 support URLs for a topic. platform: 'IOS18' or 'PIXEL'. Returns [] on network/rate-limit errors."""
+    try:
+        from duckduckgo_search import DDGS
+    except ImportError:
+        print("  ⚠ duckduckgo-search not installed. Run: pip install duckduckgo-search")
+        return []
+
+    query_apple = f'site:support.apple.com/en-in/guide/iphone/ {topic} "ios 18"'
+    query_pixel = f'site:support.google.com/pixelphone/ {topic}'
+    query = query_apple if platform == "IOS18" else query_pixel
+    urls: List[str] = []
+    try:
+        with DDGS() as ddgs:
+            for r in ddgs.text(query, max_results=5):
+                link = (r.get("href") or r.get("link") or "").strip()
+                if link and link not in urls:
+                    urls.append(link)
+                    if len(urls) >= 5:
+                        break
+    except Exception as e:
+        print(f"  ⚠ DuckDuckGo search failed (timeout/rate limit?): {e}")
+        return []
+    return urls[:5]
+
+
+# ─────────────────────────────────────────
+# LLM-READY MARKDOWN VIA JINA READER
+# ─────────────────────────────────────────
+JINA_PREFIX = "https://r.jina.ai/"
+REQUEST_HEADERS = {
+    "User-Agent": "SakshamIngest/1.0 (support doc ingestion)",
+    "Accept": "text/plain",
+}
+
+
+def fetch_markdown(url: str) -> str:
+    """Fetch URL via Jina Reader API; return clean Markdown or empty string. Logs and skips on non-200 or errors."""
+    jina_url = JINA_PREFIX + url
+    try:
+        r = requests.get(jina_url, headers=REQUEST_HEADERS, timeout=45)
+        if r.status_code != 200:
+            print(f"      Jina fetch failed: HTTP {r.status_code} — skipping")
+            return ""
+        return (r.text or "").strip()
+    except requests.exceptions.Timeout:
+        print("      Jina fetch failed: timeout — skipping")
+        return ""
+    except requests.exceptions.RequestException as e:
+        print(f"      Jina fetch failed: {e} — skipping")
+        return ""
+    except Exception as e:
+        print(f"      Jina fetch failed: {e} — skipping")
+        return ""
+
+
+# ─────────────────────────────────────────
+# SEMANTIC CHUNKING: Markdown headers + fallback splitter
+# ─────────────────────────────────────────
+HEADERS_TO_SPLIT_ON = [
+    ("#", "Header 1"),
+    ("##", "Header 2"),
+    ("###", "Header 3"),
+]
+MARKDOWN_SPLITTER = MarkdownHeaderTextSplitter(headers_to_split_on=HEADERS_TO_SPLIT_ON)
+FALLBACK_SPLITTER = RecursiveCharacterTextSplitter(
+    chunk_size=1500,
+    chunk_overlap=200,
     separators=["\n\n", "\n", ". ", "! ", "? ", " ", ""],
     length_function=len,
 )
+MAX_HEADER_CHUNK_SIZE = 1500
 
 
-# ─────────────────────────────────────────
-# APPLE PAGE EXTRACTOR
-# Waits for the article body to render, then extracts only that content.
-# Apple's article body is inside <section data-type="article"> after JS runs.
-# Falls back through multiple selectors in case the structure varies.
-# ─────────────────────────────────────────
-def _extract_apple(page, url: str) -> str:
-    page.goto(url, wait_until="domcontentloaded", timeout=30000)
-
-    # Wait for article content to appear — this is what FireCrawl was missing
-    try:
-        page.wait_for_selector("section[data-type='article'], #article, .article-body, main article", timeout=10000)
-    except PlaywrightTimeout:
-        pass  # Try to extract whatever rendered
-
-    html = page.content()
-    soup = BeautifulSoup(html, "html.parser")
-
-    # Try selectors in priority order — stop at first match
-    selectors = [
-        {"name": "section", "attrs": {"data-type": "article"}},
-        {"name": "div",     "attrs": {"id": "article"}},
-        {"name": "div",     "attrs": {"class": "article-body"}},
-        {"name": "main",    "attrs": {}},
-    ]
-
-    for sel in selectors:
-        el = soup.find(sel["name"], sel["attrs"] if sel["attrs"] else True)
-        if el:
-            # Remove nav, TOC, version selector, and feedback elements that
-            # may be nested inside the article container
-            for tag in el.find_all(["nav", "aside", "footer", "select",
-                                     "script", "style", "noscript"]):
-                tag.decompose()
-            for tag in el.find_all(class_=["version-selector", "toc",
-                                            "localnav", "breadcrumb",
-                                            "feedback", "article-feedback"]):
-                tag.decompose()
-
-            text = el.get_text(separator="\n", strip=True)
-            if len(text) > 200:  # Sanity check — real content is always longer
-                return text
-
-    # Last resort: body text (will have some chrome but better than nothing)
-    body = soup.find("body")
-    return body.get_text(separator="\n", strip=True) if body else ""
+def _header_path(metadata: dict) -> str:
+    """Build a single header_path string from splitter metadata."""
+    parts = []
+    for key in ["Header 1", "Header 2", "Header 3"]:
+        v = metadata.get(key)
+        if v:
+            parts.append(v.strip())
+    return " > ".join(parts) if parts else ""
 
 
-# ─────────────────────────────────────────
-# GOOGLE PAGE EXTRACTOR
-# Google support pages render content inside .article-body or [jscontroller]
-# article divs. We wait for the main content container then extract it.
-# ─────────────────────────────────────────
-def _extract_google(page, url: str) -> str:
-    page.goto(url, wait_until="domcontentloaded", timeout=30000)
+def semantic_chunk(markdown: str, source_url: str, platform: str) -> List[Document]:
+    """Split markdown by headers first; use RecursiveCharacterTextSplitter for oversized chunks. Attach source, platform, header_path."""
+    if not (markdown and markdown.strip()):
+        return []
 
     try:
-        page.wait_for_selector(".article-body, .cc-content, [jsname='WbKHeb'], #article-content", timeout=10000)
-    except PlaywrightTimeout:
-        pass
+        header_docs = MARKDOWN_SPLITTER.split_text(markdown)
+    except Exception:
+        header_docs = [Document(page_content=markdown, metadata={})]
 
-    html = page.content()
-    soup = BeautifulSoup(html, "html.parser")
-
-    selectors = [
-        {"name": "div", "attrs": {"class": "article-body"}},
-        {"name": "div", "attrs": {"class": "cc-content"}},
-        {"name": "div", "attrs": {"id":    "article-content"}},
-        {"name": "main","attrs": {}},
-    ]
-
-    for sel in selectors:
-        el = soup.find(sel["name"], sel["attrs"] if sel["attrs"] else True)
-        if el:
-            for tag in el.find_all(["nav", "aside", "footer", "select",
-                                     "script", "style", "noscript"]):
-                tag.decompose()
-            for tag in el.find_all(class_=["related-articles", "feedback",
-                                            "breadcrumb", "nav-list"]):
-                tag.decompose()
-
-            text = el.get_text(separator="\n", strip=True)
-            if len(text) > 200:
-                return text
-
-    body = soup.find("body")
-    return body.get_text(separator="\n", strip=True) if body else ""
+    chunks: List[Document] = []
+    for doc in header_docs:
+        content = doc.page_content.strip()
+        if not content or len(content) < 50:
+            continue
+        meta = dict(doc.metadata)
+        header_path_str = _header_path(meta)
+        if len(content) <= MAX_HEADER_CHUNK_SIZE:
+            meta["source"] = source_url
+            meta["platform"] = platform
+            meta["header_path"] = header_path_str
+            first_line = next(
+                (line.strip() for line in content.splitlines() if line.strip()),
+                "untitled",
+            )
+            meta["title"] = first_line[:120]
+            chunks.append(Document(page_content=content, metadata=meta))
+        else:
+            sub_docs = FALLBACK_SPLITTER.split_documents(
+                [Document(page_content=content, metadata=meta)]
+            )
+            for i, sub in enumerate(sub_docs):
+                sub.metadata["source"] = source_url
+                sub.metadata["platform"] = platform
+                sub.metadata["header_path"] = header_path_str
+                first_line = next(
+                    (line.strip() for line in sub.page_content.splitlines() if line.strip()),
+                    "untitled",
+                )
+                sub.metadata["title"] = first_line[:120]
+                chunks.append(sub)
+    return chunks
 
 
 # ─────────────────────────────────────────
-# GARBAGE FILTER  (safety net after extraction)
+# GARBAGE FILTER
 # ─────────────────────────────────────────
 def _is_garbage_chunk(text: str) -> bool:
     stripped = text.strip()
     if len(stripped) < 80:
         return True
-
     lines = [l.strip() for l in stripped.splitlines() if l.strip()]
     if not lines:
         return True
-
     version_keywords = {
-        "ios 26", "ios 18", "ios 17", "ios 16", "ios 15",
-        "ios 14", "ios 13", "ios 12", "select version:",
-        "modifying this control", "table of contents",
-        "android 15", "android 14", "android 13",
+        "ios 26", "ios 18", "ios 17", "select version:",
+        "table of contents", "android 15", "android 14",
     }
     version_line_count = sum(
         1 for l in lines
@@ -361,111 +340,62 @@ def _is_garbage_chunk(text: str) -> bool:
     )
     if version_line_count / len(lines) > 0.4:
         return True
-
     link_line_count = sum(1 for l in lines if l.startswith("[") and "](http" in l)
     if link_line_count / len(lines) > 0.5:
         return True
-
     return False
 
 
 # ─────────────────────────────────────────
-# METADATA ENRICHMENT
+# FETCH URLS VIA JINA AND CHUNK (no Playwright)
 # ─────────────────────────────────────────
-def _enrich_metadata(docs: List[Document], platform: str, source_url: str) -> List[Document]:
-    for i, doc in enumerate(docs):
-        first_line = next(
-            (line.strip() for line in doc.page_content.splitlines() if line.strip()),
-            "untitled"
-        )
-        doc.metadata.update({
-            "platform":    platform,
-            "source":      source_url,
-            "chunk_index": i,
-            "title":       first_line[:120],
-        })
-    return docs
-
-
-# ─────────────────────────────────────────
-# MAIN SCRAPER
-# Opens one Playwright browser for all URLs in a batch.
-# Uses the correct extractor per platform.
-# ─────────────────────────────────────────
-def _scrape_urls(urls: List[str], platform: str) -> List[Document]:
+def _fetch_and_chunk_urls(urls: List[str], platform: str) -> List[Document]:
     all_chunks: List[Document] = []
     success_count = 0
-    is_apple = platform == "IOS18"
-
-    with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=True)
-        context = browser.new_context(
-            user_agent=(
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/120.0.0.0 Safari/537.36"
-            ),
-            locale="en-US",
-        )
-        page = context.new_page()
-
-        for url in urls:
-            print(f"  🔎 Scraping: {url}")
-            try:
-                # Extract article body only
-                if is_apple:
-                    text = _extract_apple(page, url)
-                else:
-                    text = _extract_google(page, url)
-
-                if not text or len(text.strip()) < 100:
-                    print(f"      ⚠  No content extracted — skipping")
-                    continue
-
-                # Wrap in a Document then split
-                raw_doc = Document(page_content=text, metadata={})
-                enriched = _enrich_metadata([raw_doc], platform, url)
-                chunks   = SPLITTER.split_documents(enriched)
-
-                # Re-index and filter
-                clean_chunks = []
-                for j, chunk in enumerate(chunks):
-                    chunk.metadata["chunk_index"] = j
-                    if not _is_garbage_chunk(chunk.page_content):
-                        clean_chunks.append(chunk)
-
-                discarded = len(chunks) - len(clean_chunks)
-                all_chunks.extend(clean_chunks)
-                success_count += 1
-                print(f"      ✓ {len(clean_chunks)} chunks ({discarded} discarded)")
-
-                # Small polite delay between requests
-                time.sleep(0.5)
-
-            except Exception as exc:
-                print(f"      ✗ Failed: {exc}")
-
-        browser.close()
-
-    print(f"\n  📄 Scraped {success_count}/{len(urls)} URLs → {len(all_chunks)} total chunks")
+    for url in urls:
+        print(f"  🔎 Fetching: {url}")
+        markdown = fetch_markdown(url)
+        if not markdown or len(markdown) < 100:
+            print("      ⚠ No content — skipping")
+            continue
+        chunks = semantic_chunk(markdown, url, platform)
+        clean = [c for c in chunks if not _is_garbage_chunk(c.page_content)]
+        discarded = len(chunks) - len(clean)
+        all_chunks.extend(clean)
+        success_count += 1
+        print(f"      ✓ {len(clean)} chunks ({discarded} discarded)")
+        time.sleep(0.3)
+    print(f"\n  📄 Fetched {success_count}/{len(urls)} URLs → {len(all_chunks)} total chunks")
     return all_chunks
 
 
+# ─────────────────────────────────────────
+# SAVE REPORT
+# ─────────────────────────────────────────
 def _save_report(platform: str, urls: List[str]) -> None:
     path = os.path.join(BASE_DB, f"{platform.lower()}_indexed_pages.txt")
-    with open(path, "w") as fh:
-        for url in urls:
-            fh.write(url + "\n")
+    existing = []
+    if os.path.exists(path):
+        with open(path, encoding="utf-8") as f:
+            existing = [line.strip() for line in f if line.strip()]
+    seen = set(existing)
+    with open(path, "w", encoding="utf-8") as f:
+        for u in existing:
+            f.write(u + "\n")
+        for u in urls:
+            if u not in seen:
+                seen.add(u)
+                f.write(u + "\n")
     print(f"  📝 Report saved → {path}")
 
 
 # ─────────────────────────────────────────
-# CORE INGEST  (unchanged interface)
+# CORE INGEST
 # ─────────────────────────────────────────
 def ingest_platform(
-    urls:           List[str],
-    platform:       str,
-    save_path:      str,
+    urls: List[str],
+    platform: str,
+    save_path: str,
     clear_existing: bool = False,
 ) -> FAISS:
     print(f"\n{'='*60}")
@@ -476,132 +406,52 @@ def ingest_platform(
         print(f"  🧹 Clearing {save_path}")
         shutil.rmtree(save_path)
 
-    chunks = _scrape_urls(urls, platform)
+    chunks = _fetch_and_chunk_urls(urls, platform)
     if not chunks:
         raise RuntimeError(f"No chunks produced for {platform}. Aborting.")
 
     print(f"\n  💾 Building FAISS index …")
     vs = FAISS.from_documents(documents=chunks, embedding=embeddings)
-
     os.makedirs(save_path, exist_ok=True)
     vs.save_local(save_path)
     print(f"  ✅ Saved FAISS index → {save_path}")
-
     _save_report(platform, urls)
     return vs
 
 
 # ─────────────────────────────────────────
-# APPEND APPLE URLS  (scrape only new URLs, merge into existing ios18)
+# APPEND CHUNKS TO EXISTING INDEX
 # ─────────────────────────────────────────
-def _append_apple_urls() -> None:
-    if not os.path.exists(IOS_DB):
-        raise FileNotFoundError(
-            f"ios18 index not found at {IOS_DB}. Run full ingest first (no flags)."
-        )
-
-    print(f"\n{'='*60}")
-    print("📎  Appending Apple URLs to existing ios18 index")
-    print(f"{'='*60}")
-    print(f"  URLs to scrape: {len(APPLE_URLS_APPEND)}")
-
-    chunks = _scrape_urls(APPLE_URLS_APPEND, "IOS18")
+def _append_to_index(chunks: List[Document], save_path: str, platform: str) -> None:
     if not chunks:
-        print("  ⚠ No chunks produced; index unchanged.")
         return
-
-    print(f"\n  📂 Loading existing ios18 index …")
-    existing_vs = FAISS.load_local(IOS_DB, embeddings, allow_dangerous_deserialization=True)
-    print(f"  🔨 Building small index from new chunks …")
-    new_vs = FAISS.from_documents(documents=chunks, embedding=embeddings)
-    print(f"  🔀 Merging new docs into ios18 …")
-    existing_vs.merge_from(new_vs)
-    existing_vs.save_local(IOS_DB)
-    print(f"  ✅ Saved updated ios18 index → {IOS_DB}")
-
-    # Append new URLs to indexed_pages report
-    report_path = os.path.join(BASE_DB, "ios18_indexed_pages.txt")
-    existing = []
-    if os.path.exists(report_path):
-        with open(report_path) as f:
-            existing = [line.strip() for line in f if line.strip()]
-    with open(report_path, "w") as f:
-        for u in existing:
-            f.write(u + "\n")
-        for u in APPLE_URLS_APPEND:
-            f.write(u + "\n")
-    print(f"  📝 Report updated → {report_path}")
-
-    print("\n  🔀 Rebuilding combined index …")
-    merge_indexes()
-    print("\n🎉  Append complete.")
+    if not os.path.exists(save_path):
+        vs = FAISS.from_documents(documents=chunks, embedding=embeddings)
+    else:
+        existing = FAISS.load_local(save_path, embeddings, allow_dangerous_deserialization=True)
+        new_vs = FAISS.from_documents(documents=chunks, embedding=embeddings)
+        existing.merge_from(new_vs)
+        vs = existing
+    os.makedirs(save_path, exist_ok=True)
+    vs.save_local(save_path)
+    print(f"  ✅ Saved/updated index → {save_path}")
 
 
 # ─────────────────────────────────────────
-# APPEND PIXEL URLS  (scrape only new URLs, merge into existing pixel)
-# ─────────────────────────────────────────
-def _append_pixel_urls() -> None:
-    if not os.path.exists(PIXEL_DB):
-        raise FileNotFoundError(
-            f"pixel index not found at {PIXEL_DB}. Run full ingest first (no flags or --pixel-only)."
-        )
-
-    print(f"\n{'='*60}")
-    print("📎  Appending Pixel URLs to existing pixel index")
-    print(f"{'='*60}")
-    print(f"  URLs to scrape: {len(GOOGLE_URLS_APPEND)}")
-
-    chunks = _scrape_urls(GOOGLE_URLS_APPEND, "PIXEL")
-    if not chunks:
-        print("  ⚠ No chunks produced; index unchanged.")
-        return
-
-    print(f"\n  📂 Loading existing pixel index …")
-    existing_vs = FAISS.load_local(PIXEL_DB, embeddings, allow_dangerous_deserialization=True)
-    print(f"  🔨 Building small index from new chunks …")
-    new_vs = FAISS.from_documents(documents=chunks, embedding=embeddings)
-    print(f"  🔀 Merging new docs into pixel …")
-    existing_vs.merge_from(new_vs)
-    existing_vs.save_local(PIXEL_DB)
-    print(f"  ✅ Saved updated pixel index → {PIXEL_DB}")
-
-    # Append new URLs to indexed_pages report
-    report_path = os.path.join(BASE_DB, "pixel_indexed_pages.txt")
-    existing = []
-    if os.path.exists(report_path):
-        with open(report_path) as f:
-            existing = [line.strip() for line in f if line.strip()]
-    with open(report_path, "w") as f:
-        for u in existing:
-            f.write(u + "\n")
-        for u in GOOGLE_URLS_APPEND:
-            f.write(u + "\n")
-    print(f"  📝 Report updated → {report_path}")
-
-    print("\n  🔀 Rebuilding combined index …")
-    merge_indexes()
-    print("\n🎉  Pixel append complete.")
-
-
-# ─────────────────────────────────────────
-# MERGE  (unchanged)
+# MERGE
 # ─────────────────────────────────────────
 def merge_indexes() -> None:
     print(f"\n{'='*60}")
     print("🔀  Merging ios18 + pixel → combined")
     print(f"{'='*60}")
-
     if not os.path.exists(IOS_DB) or not os.path.exists(PIXEL_DB):
         raise FileNotFoundError("Both ios18 and pixel indexes must exist before merging.")
-
     print("  Loading ios18 …")
     ios_vs = FAISS.load_local(IOS_DB, embeddings, allow_dangerous_deserialization=True)
     print("  Loading pixel …")
     pixel_vs = FAISS.load_local(PIXEL_DB, embeddings, allow_dangerous_deserialization=True)
-
     print("  Merging …")
     ios_vs.merge_from(pixel_vs)
-
     if os.path.exists(COMBINED_DB):
         shutil.rmtree(COMBINED_DB)
     ios_vs.save_local(COMBINED_DB)
@@ -609,7 +459,7 @@ def merge_indexes() -> None:
 
 
 # ─────────────────────────────────────────
-# PUBLIC RETRIEVER LOADER  (unchanged)
+# PUBLIC RETRIEVER LOADER
 # ─────────────────────────────────────────
 def load_retriever(
     platform: Literal["ios18", "pixel", "combined"] = "combined",
@@ -618,10 +468,8 @@ def load_retriever(
 ):
     path_map = {"ios18": IOS_DB, "pixel": PIXEL_DB, "combined": COMBINED_DB}
     path = path_map[platform]
-
     if not os.path.exists(path):
         raise FileNotFoundError(f"Index not found at '{path}'. Run ingest first.")
-
     vs = FAISS.load_local(path, embeddings, allow_dangerous_deserialization=True)
     return vs.as_retriever(
         search_type="similarity_score_threshold",
@@ -630,32 +478,58 @@ def load_retriever(
 
 
 # ─────────────────────────────────────────
-# CLI  (unchanged)
+# CLI
 # ─────────────────────────────────────────
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Ingest Apple iOS 18 and/or Google Pixel docs into FAISS."
+        description="Ingest Apple iOS 18 and/or Google Pixel docs into FAISS (Markdown + semantic chunking)."
+    )
+    parser.add_argument(
+        "--topic",
+        type=str,
+        default="",
+        help="Discover URLs for this topic and ingest (append) instead of using full URL lists.",
     )
     group = parser.add_mutually_exclusive_group()
-    group.add_argument("--pixel-only",  action="store_true",
-                       help="Only re-ingest Pixel. Apple index must already exist.")
-    group.add_argument("--merge-only",  action="store_true",
-                       help="Skip scraping; just rebuild the combined index.")
-    group.add_argument("--append-ios",  action="store_true",
-                       help="Append APPLE_URLS_APPEND to existing ios18 index (no full re-scrape).")
-    group.add_argument("--append-pixel",  action="store_true",
-                       help="Append GOOGLE_URLS_APPEND to existing pixel index (no full re-scrape).")
+    group.add_argument("--pixel-only", action="store_true", help="Only ingest Pixel.")
+    group.add_argument("--merge-only", action="store_true", help="Only rebuild combined index.")
     args = parser.parse_args()
 
     os.makedirs(BASE_DB, exist_ok=True)
 
     if args.merge_only:
         merge_indexes()
-    elif args.append_ios:
-        _append_apple_urls()
-    elif args.append_pixel:
-        _append_pixel_urls()
-    elif args.pixel_only:
+        print("\n🎉  Merge complete.")
+        return
+
+    if args.topic.strip():
+        # Dynamic ingestion by topic
+        topic = args.topic.strip()
+        print(f"\n🔍 Dynamic ingestion for topic: «{topic}»")
+        if args.pixel_only:
+            urls_pixel = discover_support_urls(topic, "PIXEL")
+            if urls_pixel:
+                chunks = _fetch_and_chunk_urls(urls_pixel, "PIXEL")
+                _append_to_index(chunks, PIXEL_DB, "PIXEL")
+                _save_report("pixel", urls_pixel)
+            merge_indexes()
+        else:
+            urls_apple = discover_support_urls(topic, "IOS18")
+            urls_pixel = discover_support_urls(topic, "PIXEL")
+            if urls_apple:
+                chunks_ios = _fetch_and_chunk_urls(urls_apple, "IOS18")
+                _append_to_index(chunks_ios, IOS_DB, "IOS18")
+                _save_report("IOS18", urls_apple)
+            if urls_pixel:
+                chunks_pixel = _fetch_and_chunk_urls(urls_pixel, "PIXEL")
+                _append_to_index(chunks_pixel, PIXEL_DB, "PIXEL")
+                _save_report("pixel", urls_pixel)
+            merge_indexes()
+        print("\n🎉  Topic ingest complete.")
+        return
+
+    # Full ingest (hardcoded lists)
+    if args.pixel_only:
         if not os.path.exists(IOS_DB):
             print("⚠️  No ios18 index found. Run without flags first.")
             return

@@ -11,4 +11,15 @@ chromadb>=0.4.0
 faiss-cpu>=1.7.0
 python-dotenv>=1.0.0
 tiktoken>=0.5.0
-firecrawl-py>=0.0.16
+# Ingestion: Markdown via Jina, dynamic URLs, semantic chunking
+requests>=2.28.0
+duckduckgo-search>=4.0.0
+markdownify>=0.11.0
+# Hybrid retrieval + reranker
+rank_bm25>=0.2.2
+sentence-transformers>=2.2.0
+# PDF generation for source citations (Streamlit inline PDF)
+fpdf2>=2.7.0
+# Evolution API / FastAPI backend (commented out — Streamlit-only)
+# fastapi>=0.109.0
+# uvicorn[standard]>=0.27.0

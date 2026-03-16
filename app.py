@@ -1,19 +1,24 @@
-import streamlit as st
+import base64
 import os
+
+import streamlit as st
 from dotenv import load_dotenv
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings
-from langchain_community.vectorstores import FAISS
-from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
-from langchain_core.messages import SystemMessage
-from langchain_core.prompts import HumanMessagePromptTemplate
-from langchain_core.retrievers import BaseRetriever
-from langchain_core.documents import Document
-from langchain_core.callbacks import CallbackManagerForRetrieverRun
-from langchain_core.tools import tool
+from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage
-from langchain_classic.chains.combine_documents import create_stuff_documents_chain
-from pydantic import ConfigDict
-from typing import List
+
+from agent_core import (
+    _get_db_path,
+    load_system_prompt as _load_system_prompt,
+    load_vectorstore,
+    build_retriever,
+    make_search_tool,
+    infer_platform_from_messages_lc,
+    sanitize_input,
+    PLATFORM_APPLE,
+    PLATFORM_GOOGLE,
+    MAX_INPUT_LENGTH,
+)
+from pdf_generator import create_sources_pdf
 
 load_dotenv()
 
@@ -58,210 +63,20 @@ def _enable_langsmith_tracing():
 _apply_streamlit_secrets()
 _enable_langsmith_tracing()
 
-_APP_DIR = os.path.dirname(os.path.abspath(__file__))
-
 # -------------------------
-# CONSTANTS
+# APP-ONLY CONSTANTS
 # -------------------------
-PLATFORM_APPLE  = "IOS18"
-PLATFORM_GOOGLE = "PIXEL"
-MAX_INPUT_LENGTH = 2000
-HISTORY_WINDOW   = 8
-RETRIEVAL_K      = 8
-REFUSAL_PHRASE   = "I couldn't find this information in the available sources."
-ENABLE_GROUNDING_CHECK = False
-
-# -------------------------
-# DB PATH RESOLVER
-# -------------------------
-def _get_db_path():
-    for base in (_APP_DIR, os.getcwd(), "."):
-        for sub in ("combined", "ios18", "pixel"):
-            p = os.path.abspath(os.path.join(base, "care_vector_db", sub))
-            if os.path.isdir(p) and os.path.exists(os.path.join(p, "index.faiss")):
-                return p
-    return os.path.join(_APP_DIR, "care_vector_db", "combined")
+REFUSAL_PHRASE = "I couldn't find this information in the available sources."
+MAX_SOURCES_SHOWN = 10
 
 
-# -------------------------
-# SYSTEM PROMPT LOADER
-# -------------------------
 def load_system_prompt():
-    path = os.path.join(_APP_DIR, "system_prompt.txt")
-    if not os.path.exists(path):
-        st.error(f"system_prompt.txt not found at: {path}")
+    """Load system prompt; show Streamlit error and stop if missing."""
+    content = _load_system_prompt()
+    if not content:
+        st.error("system_prompt.txt not found.")
         st.stop()
-    with open(path, encoding="utf-8") as f:
-        return f.read()
-
-
-# -------------------------
-# VECTORSTORE LOADER
-# -------------------------
-def load_vectorstore(db_path):
-    if not os.path.exists(db_path):
-        return None
-    embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
-    return FAISS.load_local(
-        db_path,
-        embeddings,
-        allow_dangerous_deserialization=True,
-    )
-
-
-# -------------------------
-# PLATFORM FILTERED RETRIEVER
-# Defined at module level — not inside build_chain — so it's clean and reusable.
-# -------------------------
-class PlatformFilteredRetriever(BaseRetriever):
-    base: BaseRetriever
-    platform: str
-
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-
-    def _get_relevant_documents(
-        self, query: str, *, run_manager: CallbackManagerForRetrieverRun
-    ) -> List[Document]:
-        docs = self.base.invoke(query)
-        return [d for d in docs if d.metadata.get("platform") == self.platform]
-
-
-# -------------------------
-# BUILD RETRIEVER (MMR only — used by search_support_docs tool)
-# -------------------------
-def build_retriever(_vectorstore, platform_filter=None):
-    """Build MMR retriever. Used by search_support_docs tool."""
-    mmr_retriever = _vectorstore.as_retriever(
-        search_type="mmr",
-        search_kwargs={"k": RETRIEVAL_K, "fetch_k": RETRIEVAL_K * 4, "lambda_mult": 0.5},
-    )
-    if platform_filter is not None:
-        return PlatformFilteredRetriever(base=mmr_retriever, platform=platform_filter)
-    return mmr_retriever
-
-
-# -------------------------
-# BUILD CHAIN (kept for any non-agent use)
-# -------------------------
-def build_chain(_vectorstore, _system_prompt, platform_filter=None):
-    llm = ChatOpenAI(
-        model="gpt-4o-mini",
-        temperature=0,
-        streaming=True,
-    )
-
-    _human_text = (
-        "The following numbered sources are the ONLY allowed basis for your answer. "
-        "Do not use general knowledge.\n\n"
-        "Official support documentation (numbered sources):\n{context}\n\n"
-        "Conversation history:\n{history}\n\n"
-        "Current platform context: {current_platform}\n\n"
-        "User message:\n{input}"
-    )
-    prompt = ChatPromptTemplate.from_messages([
-        SystemMessage(content=_system_prompt),
-        HumanMessagePromptTemplate.from_template(_human_text),
-    ])
-
-    document_prompt = PromptTemplate.from_template(
-        "Source {source_index}:\n{page_content}"
-    )
-    combine_docs_chain = create_stuff_documents_chain(
-        llm,
-        prompt,
-        document_prompt=document_prompt,
-        document_separator="\n\n---\n\n",
-    )
-
-    retriever = build_retriever(_vectorstore, platform_filter)
-    return (retriever, combine_docs_chain)
-
-
-# -------------------------
-# SEARCH TOOL (for agent — retrieval only when LLM calls it)
-# -------------------------
-def make_search_tool(vectorstore, docs_container: dict):
-    """Return a LangChain tool that searches support docs. docs_container['docs'] is set when the tool runs (for UI sources)."""
-
-    @tool
-    def search_support_docs(query: str, platform: str = "") -> str:
-        """Search iPhone and Pixel support documentation. You MUST call this before giving ANY steps or how-to instructions (e.g. change ringtone, wallpaper, settings). The tool returns the only allowed source for your answer. Do NOT call for greetings, thanks, or scam mentions. query: the user's question or topic. platform: '' for both, or 'IOS18' for iPhone, 'PIXEL' for Pixel when the user has said which device."""
-        retriever = build_retriever(
-            vectorstore,
-            platform if platform in ("IOS18", "PIXEL") else None,
-        )
-        docs = retriever.invoke(query, config={"run_name": "search_support_docs"})
-        docs_container["docs"] = docs
-        if not docs:
-            return "No relevant documentation found."
-        for i, d in enumerate(docs, 1):
-            d.metadata["source_index"] = i
-        return "\n\n---\n\n".join([f"Source {i}:\n{d.page_content}" for i, d in enumerate(docs, 1)])
-
-    return search_support_docs
-
-
-# -------------------------
-# INFER PLATFORM FROM CONVERSATION (no stored state)
-# -------------------------
-def infer_platform_from_history(messages: list) -> str:
-    """Scan recent messages for device mention. Returns IOS18, PIXEL, or NOT_CONFIRMED."""
-    for m in reversed(messages):
-        if m.get("role") != "user":
-            continue
-        content = (m.get("content") or "").lower()
-        if "pixel" in content or "google" in content:
-            return PLATFORM_GOOGLE
-        if "iphone" in content or "apple" in content or "ios" in content:
-            return PLATFORM_APPLE
-    return "NOT_CONFIRMED"
-
-
-# -------------------------
-# DEVICE DETECTION (legacy helper, kept for compatibility)
-# -------------------------
-def get_platform_filter(text: str):
-    if not text:
-        return None
-    t = text.lower()
-    if "pixel" in t or "google" in t:
-        return PLATFORM_GOOGLE
-    if "iphone" in t or "apple" in t or "ios" in t:
-        return PLATFORM_APPLE
-    return None
-
-
-# -------------------------
-# INPUT SANITIZER
-# -------------------------
-def sanitize_input(text: str) -> str:
-    if not text:
-        return ""
-    sanitized = "".join(
-        ch for ch in text if ch == "\n" or (ord(ch) >= 32 and ord(ch) != 127)
-    )
-    return sanitized[:MAX_INPUT_LENGTH].strip()
-
-
-# -------------------------
-# RAG USAGE DETECTOR
-# Only show sources when the response is genuinely grounded in retrieved docs.
-# Prevents sources panel appearing on greetings, scam acks, off-topic redirects.
-# -------------------------
-def response_used_rag(response: str, docs: list) -> bool:
-    if not docs or not response:
-        return False
-    response_lower = response.lower()
-    for doc in docs:
-        chunk_words = doc.page_content.strip().lower().split()
-        trigrams = [
-            " ".join(chunk_words[i:i+3])
-            for i in range(len(chunk_words) - 2)
-        ]
-        matches = sum(1 for tg in trigrams if tg in response_lower)
-        if matches >= 2:
-            return True
-    return False
+    return content
 
 
 # -------------------------
@@ -269,9 +84,6 @@ def response_used_rag(response: str, docs: list) -> bool:
 # Uses article title from metadata instead of URL filename.
 # Show more sources and rank by chunk count so ringtone / relevant pages appear.
 # -------------------------
-MAX_SOURCES_SHOWN = 10
-
-
 def render_sources(docs: list):
     if not docs:
         return
@@ -300,13 +112,11 @@ def render_sources(docs: list):
         expanded=False
     ):
         for i, doc in enumerate(unique_docs, 1):
-            meta        = doc.metadata
+            meta        = doc.metadata or {}
             source_url  = meta.get("source", "")
             platform    = meta.get("platform", "")
-
-            # Use article title from metadata — much more readable than URL basename
-            # Falls back to the URL itself if title is missing
-            title = meta.get("title", "")
+            # Optional: header_path, title — always use .get() to avoid KeyError
+            title = meta.get("title", "") or ""
             if not title or len(title) < 5:
                 title = source_url  # last resort
 
@@ -361,50 +171,9 @@ def render_sources(docs: list):
 
 
 # -------------------------
-# GROUNDING CHECK (optional)
-# -------------------------
-def _is_answer_grounded(answer: str, docs: list) -> bool:
-    if not answer or not docs:
-        return not answer
-    context_blob = "\n\n".join(
-        f"Source {i}:\n{d.page_content}" for i, d in enumerate(docs, 1)
-    )
-    checker = ChatOpenAI(model="gpt-4o-mini", temperature=0)
-    prompt = (
-        "Does the following assistant answer contain ANY factual claim or step that is NOT "
-        "stated or clearly implied in the numbered sources below? "
-        "Answer only YES or NO.\n\n"
-        "Sources:\n" + context_blob[:12000] + "\n\nAssistant answer:\n" + answer[:2000]
-    )
-    try:
-        out  = checker.invoke(prompt)
-        text = out.content.strip().upper() if hasattr(out, "content") else str(out).strip().upper()
-        return text.startswith("NO")
-    except Exception:
-        return True
-
-
-# -------------------------
-# HISTORY BUILDER
-# -------------------------
-def build_history_text(messages: list) -> str:
-    relevant = messages[1:] if len(messages) > 1 else []
-    recent   = relevant[-(HISTORY_WINDOW):]
-    lines    = []
-    for m in recent:
-        role_label = "User" if m["role"] == "user" else "Care"
-        lines.append(f"[{role_label}]: {m['content']}")
-    return "\n".join(lines)
-
-
-# -------------------------
 # MAIN APP
 # -------------------------
 def main():
-    # Re-apply secrets and tracing on every run (needed for Streamlit Cloud)
-    _apply_streamlit_secrets()
-    _enable_langsmith_tracing()
-
     st.set_page_config(page_title="Care Assistant", page_icon="💛")
     st.title("Care Assistant")
 
@@ -439,45 +208,73 @@ def main():
     with st.chat_message("user"):
         st.write(user_input)
 
-    db_path     = _get_db_path()
-    vectorstore = load_vectorstore(db_path)
+    # Vectorstore: load once per session
+    vectorstore = st.session_state.get("vectorstore")
     if vectorstore is None:
-        st.error("Support database not available.")
-        st.code(db_path, language=None)
-        st.info(
-            "**Local:** Run `python ingest_faiss.py` in the project folder, then restart.\n\n"
-            "**Streamlit Cloud:** Include `care_vector_db/` in the repo or set run command to: "
-            "`python ingest_faiss.py && streamlit run app.py`"
-        )
-        return
+        db_path = _get_db_path()
+        vectorstore = load_vectorstore(db_path)
+        if vectorstore is None:
+            st.error("Support database not available.")
+            st.code(db_path, language=None)
+            st.info(
+                "**Local:** Run `python ingest.py` in the project folder, then restart.\n\n"
+                "**Streamlit Cloud:** Include `care_vector_db/` in the repo or set run command to: "
+                "`python ingest.py && streamlit run app.py`"
+            )
+            return
+        st.session_state["vectorstore"] = vectorstore
+        st.session_state["db_path"] = db_path
 
-    system_prompt = load_system_prompt()
-    inferred_platform = infer_platform_from_history(st.session_state.messages)
+    # System prompt: load once per session
+    if st.session_state.get("system_prompt") is None:
+        content = load_system_prompt()  # may st.stop() if missing
+        st.session_state["system_prompt"] = content
+    system_prompt = st.session_state["system_prompt"]
+
+    # Pre-build retrievers once per session
+    if st.session_state.get("retrievers") is None:
+        st.session_state["retrievers"] = {
+            None: build_retriever(vectorstore, None),
+            "IOS18": build_retriever(vectorstore, "IOS18"),
+            "PIXEL": build_retriever(vectorstore, "PIXEL"),
+        }
+    retriever_map = st.session_state["retrievers"]
+    # Build message list once: history + current user message
+    history_lc = []
+    for m in st.session_state.messages[1:]:
+        if m["role"] == "user":
+            history_lc.append(HumanMessage(content=m["content"]))
+        else:
+            history_lc.append(AIMessage(content=m["content"]))
+    history_lc.append(HumanMessage(content=user_input))
+
+    # Infer platform from this turn; once user says iPhone or Pixel, persist it for the rest of the session
+    inferred_platform = infer_platform_from_messages_lc(history_lc)
+    if inferred_platform in ("IOS18", "PIXEL"):
+        st.session_state["confirmed_device"] = inferred_platform
+    current_platform = (
+        st.session_state.get("confirmed_device")
+        or inferred_platform
+    )
+
     tool_instruction = (
         "\n\n## TOOL USE — MANDATORY FOR STEPS/HOW-TO\n"
-        "When the user asks how to do something on their phone (e.g. change ringtone, wallpaper, settings), "
-        "you MUST call the search_support_docs tool first. Use the query as the user's question and set platform to "
-        "'IOS18' or 'PIXEL' if the user has already said which device. Answer ONLY from the tool result. "
+        "When the user asks how to do something on their phone (e.g. change ringtone, wallpaper, settings, use an app), "
+        "you MUST call the search_support_docs tool in this turn. Do NOT skip the tool call even if you answered a similar question earlier in the conversation; the user only receives the sources PDF when you call the tool now. Use the query as the user's question and set platform to "
+        "'IOS18' or 'PIXEL' when device is confirmed. Answer ONLY from the tool result. "
         "Never give steps from memory — if you do not call the tool, do not give steps."
     )
     system_with_platform = (
         system_prompt
         + tool_instruction
         + "\n\nCurrent device context (use for steps and filtering): "
-        + inferred_platform
+        + current_platform
     )
 
-    # Build message list for the agent (system + history + latest user)
-    messages_lc = [SystemMessage(content=system_with_platform)]
-    for m in st.session_state.messages[1:]:
-        if m["role"] == "user":
-            messages_lc.append(HumanMessage(content=m["content"]))
-        else:
-            messages_lc.append(AIMessage(content=m["content"]))
-    messages_lc.append(HumanMessage(content=user_input))
+    messages_lc = [SystemMessage(content=system_with_platform)] + history_lc
 
-    docs_container = {}
-    search_tool = make_search_tool(vectorstore, docs_container)
+    docs_container: dict = {}
+    search_tool = make_search_tool(vectorstore, docs_container, retriever_map=retriever_map)
     llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
     llm_with_tools = llm.bind_tools([search_tool])
 
@@ -490,7 +287,7 @@ def main():
                 response = llm_with_tools.invoke(messages_lc)
                 messages_lc.append(response)
 
-                if not getattr(response, "tool_calls", None):
+                if not getattr(response, "tool_calls", None) or not response.tool_calls:
                     full_response = response.content or ""
                     break
 
@@ -504,9 +301,6 @@ def main():
                     )
 
             response_placeholder.markdown(full_response)
-            retrieved_docs = docs_container.get("docs", [])
-            if retrieved_docs:
-                render_sources(retrieved_docs)
 
         except Exception as e:
             st.error("Something went wrong while generating a response. Please try again.")
@@ -514,6 +308,83 @@ def main():
             return
 
     st.session_state.messages.append({"role": "assistant", "content": full_response})
+
+    # If search_support_docs was called and returned docs, show PDF (trust the tool stream).
+    retrieved_docs = docs_container.get("docs", [])
+    if retrieved_docs:
+        try:
+            pdf_b64 = create_sources_pdf(retrieved_docs[:MAX_SOURCES_SHOWN])
+        except Exception:
+            pdf_b64 = ""
+
+        if pdf_b64:
+            data_url = f"data:application/pdf;base64,{pdf_b64}"
+            file_name = "Care_Support_Sources.pdf"
+            with st.chat_message("assistant"):
+                # File bubble
+                st.markdown(
+                    f"""
+                    <div style="
+                        border-radius: 12px;
+                        border: 1px solid #d0d7de;
+                        background: #f7f7f8;
+                        padding: 10px 12px;
+                        display: flex;
+                        align-items: center;
+                        gap: 10px;
+                        max-width: 420px;
+                        margin-bottom: 8px;
+                    ">
+                        <div style="
+                            width: 32px;
+                            height: 40px;
+                            border-radius: 6px;
+                            background: linear-gradient(135deg,#f97316,#ea580c);
+                            display:flex;
+                            align-items:center;
+                            justify-content:center;
+                            color:#fff;
+                            font-size:0.7rem;
+                            font-weight:600;
+                        ">
+                            PDF
+                        </div>
+                        <div style="flex:1; min-width:0;">
+                            <div style="
+                                font-size:0.85rem;
+                                font-weight:600;
+                                color:#111827;
+                                overflow:hidden;
+                                text-overflow:ellipsis;
+                                white-space:nowrap;
+                            ">{file_name}</div>
+                            <div style="font-size:0.75rem;color:#6b7280;">
+                                Tap to open the PDF preview below
+                            </div>
+                        </div>
+                        <a href="{data_url}" target="_blank" style="
+                            font-size:0.8rem;
+                            font-weight:600;
+                            color:#2563eb;
+                            text-decoration:none;
+                            white-space:nowrap;
+                        ">
+                            Open
+                        </a>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+                # Inline PDF viewer
+                st.markdown(
+                    f"""
+                    <iframe
+                        src="{data_url}"
+                        style="width:100%;max-width:540px;height:420px;border:1px solid #e5e7eb;border-radius:8px;"
+                    ></iframe>
+                    """,
+                    unsafe_allow_html=True,
+                )
 
 
 if __name__ == "__main__":
