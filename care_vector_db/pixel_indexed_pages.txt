@@ -13,8 +13,6 @@ https://support.google.com/pixelphone/answer/14782427
 https://support.google.com/pixelphone/answer/6183600
 https://support.google.com/pixelphone/answer/6187458
 https://support.google.com/pixelphone/answer/6006564
-
-
 https://support.google.com/pixelphone/answer/7283669
 https://support.google.com/pixelphone/answer/2844832
 https://support.google.com/pixelphone/answer/2781850
@@ -34,3 +32,6 @@ https://support.google.com/pixelphone/answer/2819577?hl=en&ref_topic=7083814
 https://support.google.com/pixelphone/answer/7289143?hl=en&ref_topic=7083814
 https://support.google.com/pixelphone/answer/7109524?hl=en&ref_topic=7083814
 https://support.google.com/pixelphone/?hl=en#topic=7083814
+https://support.google.com/pixelphone/answer/6122841
+https://support.google.com/pixelphone/answer/12913009
+https://support.google.com/pixelphone/answer/9316333

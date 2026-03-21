@@ -5,6 +5,10 @@
 1. **GitHub account** – [github.com](https://github.com)
 2. **Streamlit Community Cloud account** – [share.streamlit.io](https://share.streamlit.io) (sign in with GitHub)
 3. **OpenAI API key** – for the RAG chat
+4. **Tesseract OCR binary** — for image-based scam detection
+
+   - macOS (brew): `brew install tesseract`
+   - Ubuntu: `sudo apt-get update && sudo apt-get install -y tesseract-ocr`
 
 ## 1. Push your app to GitHub
 

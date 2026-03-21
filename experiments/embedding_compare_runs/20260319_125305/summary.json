@@ -1,0 +1,82 @@
+{
+  "per_url_stats": [
+    {
+      "url": "https://support.apple.com/en-in/guide/iphone/iph841379c3d/26/ios/18",
+      "ok": true,
+      "chunks": 107,
+      "discarded": 3
+    },
+    {
+      "url": "https://support.apple.com/en-in/guide/iphone/iphb71f9b54d/26/ios/18",
+      "ok": true,
+      "chunks": 83,
+      "discarded": 1
+    },
+    {
+      "url": "https://support.apple.com/en-in/guide/iphone/iphf574afb44/26/ios/18",
+      "ok": true,
+      "chunks": 112,
+      "discarded": 0
+    },
+    {
+      "url": "https://support.apple.com/en-in/guide/iphone/iph81c7fd7d1/26/ios/18",
+      "ok": true,
+      "chunks": 109,
+      "discarded": 0
+    },
+    {
+      "url": "https://support.apple.com/en-in/guide/iphone/iphca3d8b4e3/26/ios/18",
+      "ok": true,
+      "chunks": 107,
+      "discarded": 2
+    },
+    {
+      "url": "https://support.apple.com/en-in/guide/iphone/iph1a1f981ad/26/ios/18",
+      "ok": true,
+      "chunks": 108,
+      "discarded": 2
+    },
+    {
+      "url": "https://support.apple.com/en-in/guide/iphone/iph83bfec492/26/ios/18",
+      "ok": true,
+      "chunks": 78,
+      "discarded": 1
+    },
+    {
+      "url": "https://support.apple.com/en-in/guide/iphone/iph9374b7411/ios",
+      "ok": true,
+      "chunks": 114,
+      "discarded": 0
+    },
+    {
+      "url": "https://support.apple.com/en-in/guide/iphone/iph37c04838/ios",
+      "ok": true,
+      "chunks": 110,
+      "discarded": 1
+    },
+    {
+      "url": "https://support.apple.com/en-in/guide/iphone/iph3d267104/ios",
+      "ok": true,
+      "chunks": 79,
+      "discarded": 1
+    },
+    {
+      "url": "https://support.apple.com/en-in/guide/iphone/iph4fd8a0b89/18.0/ios/18.0",
+      "ok": true,
+      "chunks": 108,
+      "discarded": 0
+    }
+  ],
+  "total_chunks": 1115,
+  "char_lengths": {
+    "min": 83,
+    "max": 1499,
+    "mean": 1186.71
+  },
+  "tiktoken": {
+    "tokens_once": 450130,
+    "tokens_embed_x2": 900260,
+    "error": null
+  },
+  "fetch_only": false
+}

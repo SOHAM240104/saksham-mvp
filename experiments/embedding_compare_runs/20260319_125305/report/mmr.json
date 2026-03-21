@@ -1,0 +1,77 @@
+{
+  "query": "How do I turn my iPhone off completely using Settings or the side button?",
+  "small": [
+    {
+      "rank": 1,
+      "source": "https://support.apple.com/en-in/guide/iphone/iph841379c3d/26/ios/18",
+      "title": "Use the side button to turn on iPhone. You can use the side button (along with either volume button on some models) or S",
+      "header_path": "Turn iPhone on or off",
+      "preview": "Use the side button to turn on iPhone. You can use the side button (along with either volume button on some models) or Settings ![](https://help.apple.com/assets/683A54F5227CBBDB98051B96/683A54FC545676DF600F97D4/en_US/88b2400e45bcf521514b7252cbb2d959.png) to turn off iPhone.\nIf your iPhone isn\u2019t working as expected, you can try restarting it by turning it off, then turning it back on. If turning it off and on doesn\u2019t fix the issue, try [forcing it to restart](https://support.apple.com/en-in/guid"
+    },
+    {
+      "rank": 2,
+      "source": "https://support.apple.com/en-in/guide/iphone/iphb71f9b54d/26/ios/18",
+      "title": "1. Go to Settings ![](https://help.apple.com/assets/683A54F5227CBBDB98051B96/683A54FC545676DF600F97D4/en_US/88b2400e45bc",
+      "header_path": "Adjust the volume on iPhone > Lock the ringer and alert volumes in Settings",
+      "preview": "1. Go to Settings ![](https://help.apple.com/assets/683A54F5227CBBDB98051B96/683A54FC545676DF600F97D4/en_US/88b2400e45bcf521514b7252cbb2d959.png), then tap Sounds & Haptics.\n2. Turn off Change with Buttons."
+    },
+    {
+      "rank": 3,
+      "source": "https://support.apple.com/en-in/guide/iphone/iph81c7fd7d1/26/ios/18",
+      "title": "With the push of a button or flip of a switch, you can quickly silence your iPhone.",
+      "header_path": "Silence iPhone",
+      "preview": "With the push of a button or flip of a switch, you can quickly silence your iPhone."
+    },
+    {
+      "rank": 4,
+      "source": "https://support.apple.com/en-in/guide/iphone/iph83bfec492/26/ios/18",
+      "title": "* [ Change Face ID and attention settings ](https://support.apple.com/en-in/guide/iphone/iph646624222/18.0/ios/18.0)",
+      "header_path": "Quit and reopen an app on iPhone > iPhone User Guide",
+      "preview": "* [ Change Face ID and attention settings ](https://support.apple.com/en-in/guide/iphone/iph646624222/18.0/ios/18.0)\n* [ Use Voice Control ](https://support.apple.com/en-in/guide/iphone/iph2c21a3c88/18.0/ios/18.0)\n* [ Use Voice Control commands with CarPlay ](https://support.apple.com/en-in/guide/iphone/ipha24839833/18.0/ios/18.0)\n* [ Adjust the side or Home button ](https://support.apple.com/en-in/guide/iphone/iph75f461ff0/18.0/ios/18.0)\n* [ Adjust Camera Control settings ](https://support.appl"
+    },
+    {
+      "rank": 5,
+      "source": "https://support.apple.com/en-in/guide/iphone/iph841379c3d/26/ios/18",
+      "title": "* _iPhone with Face ID:_ Simultaneously press and hold the side button and either volume button until the sliders appear",
+      "header_path": "Turn iPhone on or off > Turn off iPhone",
+      "preview": "* _iPhone with Face ID:_ Simultaneously press and hold the side button and either volume button until the sliders appear, then drag the Power Off slider.\n* _iPhone with the Home button:_ Press and hold the side button, then drag the slider.\n![Illustrations of two different iPhone models with the screens facing up. The leftmost illustration shows the volume up and volume down buttons on the left side of the device and the side button on the right. The rightmost illustration shows the side button "
+    }
+  ],
+  "large": [
+    {
+      "rank": 1,
+      "source": "https://support.apple.com/en-in/guide/iphone/iph841379c3d/26/ios/18",
+      "title": "Use the side button to turn on iPhone. You can use the side button (along with either volume button on some models) or S",
+      "header_path": "Turn iPhone on or off",
+      "preview": "Use the side button to turn on iPhone. You can use the side button (along with either volume button on some models) or Settings ![](https://help.apple.com/assets/683A54F5227CBBDB98051B96/683A54FC545676DF600F97D4/en_US/88b2400e45bcf521514b7252cbb2d959.png) to turn off iPhone.\nIf your iPhone isn\u2019t working as expected, you can try restarting it by turning it off, then turning it back on. If turning it off and on doesn\u2019t fix the issue, try [forcing it to restart](https://support.apple.com/en-in/guid"
+    },
+    {
+      "rank": 2,
+      "source": "https://support.apple.com/en-in/guide/iphone/iph81c7fd7d1/26/ios/18",
+      "title": "With the push of a button or flip of a switch, you can quickly silence your iPhone.",
+      "header_path": "Silence iPhone",
+      "preview": "With the push of a button or flip of a switch, you can quickly silence your iPhone."
+    },
+    {
+      "rank": 3,
+      "source": "https://support.apple.com/en-in/guide/iphone/iphb71f9b54d/26/ios/18",
+      "title": "1. Go to Settings ![](https://help.apple.com/assets/683A54F5227CBBDB98051B96/683A54FC545676DF600F97D4/en_US/88b2400e45bc",
+      "header_path": "Adjust the volume on iPhone > Lock the ringer and alert volumes in Settings",
+      "preview": "1. Go to Settings ![](https://help.apple.com/assets/683A54F5227CBBDB98051B96/683A54FC545676DF600F97D4/en_US/88b2400e45bcf521514b7252cbb2d959.png), then tap Sounds & Haptics.\n2. Turn off Change with Buttons."
+    },
+    {
+      "rank": 4,
+      "source": "https://support.apple.com/en-in/guide/iphone/iph841379c3d/26/ios/18",
+      "title": "* _iPhone with Face ID:_ Simultaneously press and hold the side button and either volume button until the sliders appear",
+      "header_path": "Turn iPhone on or off > Turn off iPhone",
+      "preview": "* _iPhone with Face ID:_ Simultaneously press and hold the side button and either volume button until the sliders appear, then drag the Power Off slider.\n* _iPhone with the Home button:_ Press and hold the side button, then drag the slider.\n![Illustrations of two different iPhone models with the screens facing up. The leftmost illustration shows the volume up and volume down buttons on the left side of the device and the side button on the right. The rightmost illustration shows the side button "
+    },
+    {
+      "rank": 5,
+      "source": "https://support.apple.com/en-in/guide/iphone/iph3d267104/ios",
+      "title": "* [ Use Advanced Data Protection ](https://support.apple.com/en-in/guide/iphone/iph584ea27f5/ios)",
+      "header_path": "Change the wallpaper on iPhone > iPhone User Guide",
+      "preview": "* [ Use Advanced Data Protection ](https://support.apple.com/en-in/guide/iphone/iph584ea27f5/ios)\n* [ Use Lockdown Mode ](https://support.apple.com/en-in/guide/iphone/iph845f6f40c/ios)\n* [ Install Background Security Improvements ](https://support.apple.com/en-in/guide/iphone/iph049680987/ios)\n* [ Use Stolen Device Protection ](https://support.apple.com/en-in/guide/iphone/iph17105538b/ios)\n* [ Receive warnings about sensitive content ](https://support.apple.com/en-in/guide/iphone/iphede874992/io"
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "timestamp_utc": "2026-03-19T12:53:43.254727+00:00",
+  "platform": "IOS18",
+  "num_urls_requested": 11,
+  "urls": [
+    "https://support.apple.com/en-in/guide/iphone/iph841379c3d/26/ios/18",
+    "https://support.apple.com/en-in/guide/iphone/iphb71f9b54d/26/ios/18",
+    "https://support.apple.com/en-in/guide/iphone/iphf574afb44/26/ios/18",
+    "https://support.apple.com/en-in/guide/iphone/iph81c7fd7d1/26/ios/18",
+    "https://support.apple.com/en-in/guide/iphone/iphca3d8b4e3/26/ios/18",
+    "https://support.apple.com/en-in/guide/iphone/iph1a1f981ad/26/ios/18",
+    "https://support.apple.com/en-in/guide/iphone/iph83bfec492/26/ios/18",
+    "https://support.apple.com/en-in/guide/iphone/iph9374b7411/ios",
+    "https://support.apple.com/en-in/guide/iphone/iph37c04838/ios",
+    "https://support.apple.com/en-in/guide/iphone/iph3d267104/ios",
+    "https://support.apple.com/en-in/guide/iphone/iph4fd8a0b89/18.0/ios/18.0"
+  ],
+  "args": {
+    "num_urls": 18,
+    "fetch_only": false,
+    "no_mmr": false,
+    "samples": 3,
+    "output": null,
+    "no_save": false,
+    "urls_file": "care_vector_db/ios18_indexed_pages.txt",
+    "line_start": 100,
+    "line_end": 110,
+    "queries_file": "experiments/ios18_indexed_tail_queries.txt"
+  },
+  "note": "Raw markdown from Crawl4AI is identical for both embedding models; chunks are the same. Side-by-side compares similarity_search ranking only."
+}

@@ -17,6 +17,7 @@ Usage:
   python ingest.py --topic "battery" --pixel-only
 """
 
+import asyncio
 import os
 import shutil
 import argparse
@@ -25,6 +26,9 @@ from typing import List, Literal
 
 from dotenv import load_dotenv
 import requests
+
+from crawl4ai import AsyncWebCrawler, CrawlerRunConfig
+from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
 
 from langchain_community.vectorstores import FAISS
 from langchain_text_splitters import (
@@ -48,6 +52,37 @@ COMBINED_DB = os.path.join(BASE_DB, "combined")
 # EMBEDDINGS
 # ─────────────────────────────────────────
 embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
+
+# ─────────────────────────────────────────
+# CRAWL4AI: clean markdown with image src and link URLs kept (for PDF screenshots/icons)
+# ─────────────────────────────────────────
+_crawl4ai_md_generator = DefaultMarkdownGenerator(
+    options={
+        "ignore_links": False,   # keep [text](url) and link hrefs
+        "ignore_images": False,  # keep ![alt](image_src) in markdown
+        "escape_html": False,
+        "body_width": 0,         # no wrapping
+        "skip_internal_links": False,
+    },
+)
+CRAWL4AI_CONFIG = CrawlerRunConfig(markdown_generator=_crawl4ai_md_generator)
+
+
+def extract_markdown(result) -> str:
+    """Get raw_markdown (or plain markdown string) from Crawl4AI result.
+
+    We deliberately avoid fit_markdown to keep content as close as possible
+    to the original page while still in markdown form.
+    """
+    md = getattr(result, "markdown", None)
+    if md is None:
+        return ""
+    if hasattr(md, "raw_markdown") and md.raw_markdown:
+        return md.raw_markdown or ""
+    if isinstance(md, str):
+        return md
+    return ""
+
 
 # ─────────────────────────────────────────
 # HARDCODED URL LISTS (fallback when no --topic)
@@ -219,33 +254,25 @@ def discover_support_urls(topic: str, platform: str) -> List[str]:
 
 
 # ─────────────────────────────────────────
-# LLM-READY MARKDOWN VIA JINA READER
+# FETCH VIA CRAWL4AI (clean markdown only; image/link URLs kept for PDF)
 # ─────────────────────────────────────────
-JINA_PREFIX = "https://r.jina.ai/"
-REQUEST_HEADERS = {
-    "User-Agent": "SakshamIngest/1.0 (support doc ingestion)",
-    "Accept": "text/plain",
-}
+async def _fetch_one_url(url: str):
+    """Fetch one URL with Crawl4AI. Returns markdown string or None on failure."""
+    try:
+        async with AsyncWebCrawler() as crawler:
+            result = await crawler.arun(url, config=CRAWL4AI_CONFIG)
+        if not result or not getattr(result, "success", False):
+            return None
+        return extract_markdown(result)
+    except Exception as e:
+        print(f"      Crawl4AI error: {e}")
+        return None
 
 
 def fetch_markdown(url: str) -> str:
-    """Fetch URL via Jina Reader API; return clean Markdown or empty string. Logs and skips on non-200 or errors."""
-    jina_url = JINA_PREFIX + url
-    try:
-        r = requests.get(jina_url, headers=REQUEST_HEADERS, timeout=45)
-        if r.status_code != 200:
-            print(f"      Jina fetch failed: HTTP {r.status_code} — skipping")
-            return ""
-        return (r.text or "").strip()
-    except requests.exceptions.Timeout:
-        print("      Jina fetch failed: timeout — skipping")
-        return ""
-    except requests.exceptions.RequestException as e:
-        print(f"      Jina fetch failed: {e} — skipping")
-        return ""
-    except Exception as e:
-        print(f"      Jina fetch failed: {e} — skipping")
-        return ""
+    """Fetch URL via Crawl4AI; return clean Markdown or empty string."""
+    md = asyncio.run(_fetch_one_url(url))
+    return md or ""
 
 
 # ─────────────────────────────────────────
@@ -277,7 +304,7 @@ def _header_path(metadata: dict) -> str:
 
 
 def semantic_chunk(markdown: str, source_url: str, platform: str) -> List[Document]:
-    """Split markdown by headers first; use RecursiveCharacterTextSplitter for oversized chunks. Attach source, platform, header_path."""
+    """Split markdown by headers first; use RecursiveCharacterTextSplitter for oversized chunks. Attach source, platform, header_path, title. No HTML."""
     if not (markdown and markdown.strip()):
         return []
 
@@ -307,7 +334,7 @@ def semantic_chunk(markdown: str, source_url: str, platform: str) -> List[Docume
             sub_docs = FALLBACK_SPLITTER.split_documents(
                 [Document(page_content=content, metadata=meta)]
             )
-            for i, sub in enumerate(sub_docs):
+            for sub in sub_docs:
                 sub.metadata["source"] = source_url
                 sub.metadata["platform"] = platform
                 sub.metadata["header_path"] = header_path_str
@@ -347,14 +374,14 @@ def _is_garbage_chunk(text: str) -> bool:
 
 
 # ─────────────────────────────────────────
-# FETCH URLS VIA JINA AND CHUNK (no Playwright)
+# FETCH URLS VIA CRAWL4AI, CHUNK MARKDOWN ONLY (no HTML store)
 # ─────────────────────────────────────────
-def _fetch_and_chunk_urls(urls: List[str], platform: str) -> List[Document]:
+async def _fetch_and_chunk_urls_async(urls: List[str], platform: str) -> List[Document]:
     all_chunks: List[Document] = []
     success_count = 0
     for url in urls:
         print(f"  🔎 Fetching: {url}")
-        markdown = fetch_markdown(url)
+        markdown = await _fetch_one_url(url)
         if not markdown or len(markdown) < 100:
             print("      ⚠ No content — skipping")
             continue
@@ -364,9 +391,13 @@ def _fetch_and_chunk_urls(urls: List[str], platform: str) -> List[Document]:
         all_chunks.extend(clean)
         success_count += 1
         print(f"      ✓ {len(clean)} chunks ({discarded} discarded)")
-        time.sleep(0.3)
+        await asyncio.sleep(0.3)
     print(f"\n  📄 Fetched {success_count}/{len(urls)} URLs → {len(all_chunks)} total chunks")
     return all_chunks
+
+
+def _fetch_and_chunk_urls(urls: List[str], platform: str) -> List[Document]:
+    return asyncio.run(_fetch_and_chunk_urls_async(urls, platform))
 
 
 # ─────────────────────────────────────────
