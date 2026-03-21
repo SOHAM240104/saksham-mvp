@@ -10,6 +10,8 @@
    - macOS (brew): `brew install tesseract`
    - Ubuntu: `sudo apt-get update && sudo apt-get install -y tesseract-ocr`
 
+5. **WeasyPrint (PDF sources)** — the Python package is in `requirements.txt`, but WeasyPrint needs **system** libraries (Pango, Cairo, GObject). On **Streamlit Community Cloud**, commit **`packages.txt`** in the repo root so those packages are installed at deploy time. Without it, the app fails on import with `OSError` loading `libgobject` / `pango`. Locally on macOS, install WeasyPrint via Homebrew or use the same libs your distro documents.
+
 ## 1. Push your app to GitHub
 
 From your project folder:
