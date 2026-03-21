@@ -828,73 +828,38 @@ def main():
                     st.exception(e)
 
         if pdf_b64:
-            data_url = f"data:application/pdf;base64,{pdf_b64}"
+            # Decode once. Do NOT use iframe src=data:application/pdf — blocked by Streamlit Cloud CSP
+            # and many browsers; use native viewer + download instead.
+            pdf_bytes = base64.b64decode(pdf_b64)
             file_name = "Care_Support_Sources.pdf"
+            _turn = len(st.session_state.get("messages", []))
+            _digest = hashlib.sha256(pdf_bytes).hexdigest()[:16]
+            _pdf_key = f"care_pdf_{_turn}_{_digest}"
+            data_url = f"data:application/pdf;base64,{pdf_b64}"
+
             with st.chat_message("assistant"):
-                # File bubble
-                st.markdown(
-                    f"""
-                    <div style="
-                        border-radius: 12px;
-                        border: 1px solid #d0d7de;
-                        background: #f7f7f8;
-                        padding: 10px 12px;
-                        display: flex;
-                        align-items: center;
-                        gap: 10px;
-                        max-width: 420px;
-                        margin-bottom: 8px;
-                    ">
-                        <div style="
-                            width: 32px;
-                            height: 40px;
-                            border-radius: 6px;
-                            background: linear-gradient(135deg,#f97316,#ea580c);
-                            display:flex;
-                            align-items:center;
-                            justify-content:center;
-                            color:#fff;
-                            font-size:0.7rem;
-                            font-weight:600;
-                        ">
-                            PDF
-                        </div>
-                        <div style="flex:1; min-width:0;">
-                            <div style="
-                                font-size:0.85rem;
-                                font-weight:600;
-                                color:#111827;
-                                overflow:hidden;
-                                text-overflow:ellipsis;
-                                white-space:nowrap;
-                            ">{file_name}</div>
-                            <div style="font-size:0.75rem;color:#6b7280;">
-                                Tap to open the PDF preview below
-                            </div>
-                        </div>
-                        <a href="{data_url}" target="_blank" style="
-                            font-size:0.8rem;
-                            font-weight:600;
-                            color:#2563eb;
-                            text-decoration:none;
-                            white-space:nowrap;
-                        ">
-                            Open
-                        </a>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
+                st.markdown("**Support sources (PDF)**")
+                st.download_button(
+                    label="Download sources PDF",
+                    data=pdf_bytes,
+                    file_name=file_name,
+                    mime="application/pdf",
+                    key=f"dl_{_pdf_key}",
                 )
-                # Inline PDF viewer
-                st.markdown(
-                    f"""
-                    <iframe
-                        src="{data_url}"
-                        style="width:100%;max-width:540px;height:420px;border:1px solid #e5e7eb;border-radius:8px;"
-                    ></iframe>
-                    """,
-                    unsafe_allow_html=True,
-                )
+                try:
+                    st.pdf(io.BytesIO(pdf_bytes), height=420, key=f"pv_{_pdf_key}")
+                except Exception:
+                    st.caption(
+                        "Inline preview failed — use **Download**. "
+                        "Ensure `streamlit[pdf]` is installed (see requirements.txt)."
+                    )
+                # Optional: open in a new tab (often works where iframe data: URLs do not)
+                if len(data_url) < 1_500_000:
+                    st.markdown(
+                        f'<p style="font-size:0.9rem;margin-top:0.5rem;">'
+                        f'<a href="{data_url}" target="_blank" rel="noopener noreferrer">Open in new tab</a></p>',
+                        unsafe_allow_html=True,
+                    )
 
 
 if __name__ == "__main__":

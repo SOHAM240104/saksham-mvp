@@ -7,6 +7,8 @@ font = "sans serif"
 
 [server]
 headless = true
+# Large repos (vector DB, html_store, …) exceed Linux inotify limits on Streamlit Cloud.
+fileWatcherType = "none"
 enableCORS = false
 enableXsrfProtection = true
 

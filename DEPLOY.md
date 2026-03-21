@@ -12,6 +12,8 @@
 
 5. **WeasyPrint (PDF sources)** — the Python package is in `requirements.txt`, but WeasyPrint needs **system** libraries (Pango, Cairo, GObject) and **at least one installed font** (Fontconfig alone is not enough). Without TTFs, PDFs can render as blank white pages. The repo’s **`packages.txt`** includes **`fonts-dejavu-core`** for that reason. On **Streamlit Community Cloud**, commit **`packages.txt`** in the repo root (one **package name per line**, **no `#` comment lines** — apt treats every line as a package). If native libs are missing, the app will show an error when it tries to build the sources PDF. Locally on macOS, Homebrew or distro packages supply the libs and fonts.
 
+6. **PDF on the public app** — `requirements.txt` uses **`streamlit[pdf]`** so the app can call **`st.pdf()`** for the inline viewer. Plain HTML **iframes** with `data:application/pdf;base64,...` are often **blocked** by Streamlit Community Cloud’s **Content-Security-Policy**, so the UI uses Streamlit’s viewer plus a **Download** button instead.
+
 ## 1. Push your app to GitHub
 
 From your project folder:
