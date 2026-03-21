@@ -817,8 +817,15 @@ def main():
     if mode == "tech" and retrieved_docs:
         try:
             pdf_b64 = create_sources_pdf(retrieved_docs[:MAX_SOURCES_SHOWN])
-        except Exception:
+        except Exception as e:
             pdf_b64 = ""
+            with st.chat_message("assistant"):
+                st.warning(
+                    "Sources PDF could not be generated (WeasyPrint). "
+                    "On Streamlit Cloud, ensure `packages.txt` includes Cairo/Pango deps — see DEPLOY.md."
+                )
+                with st.expander("Technical details"):
+                    st.exception(e)
 
         if pdf_b64:
             data_url = f"data:application/pdf;base64,{pdf_b64}"
