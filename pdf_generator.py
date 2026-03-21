@@ -108,8 +108,9 @@ def create_sources_pdf(docs: List[Document]) -> str:
   @page {{
     margin: 18mm 14mm;
   }}
+  /* Linux/Cloud: stack must include a font that exists (Streamlit has no Apple/Segoe TTFs). */
   body {{
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+    font-family: "DejaVu Sans", DejaVu, "Liberation Sans", Arial, Helvetica, sans-serif;
     font-size: 13px;
     line-height: 1.5;
     color: #111827;
@@ -132,7 +133,7 @@ def create_sources_pdf(docs: List[Document]) -> str:
     word-break: break-word;
   }}
   code {{
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    font-family: "DejaVu Sans Mono", "Liberation Mono", ui-monospace, monospace;
     font-size: 12px;
     background: #f3f4f6;
     padding: 1px 4px;

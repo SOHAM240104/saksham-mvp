@@ -8,3 +8,4 @@ libgdk-pixbuf-2.0-0
 libffi-dev
 shared-mime-info
 libfontconfig1
+fonts-dejavu-core
