@@ -1,6 +1,7 @@
-# System libraries for WeasyPrint (used by pdf_generator.py).
-# pip installs the Python package; these are the native libs (Pango, Cairo, GObject) it loads at runtime.
-# Streamlit Community Cloud runs `apt-get install` for each line. See: https://doc.courtbouillon.org/weasyprint/stable/first_steps.html#debian-11
+# System libraries for WeasyPrint (used by pdf_generator.py when native libs load).
+# pip installs the Python package; Pango/Cairo/GObject come from apt. Streamlit Cloud: one package per line.
+# If libs still fail to load, pdf_generator falls back to fpdf2 (pure Python).
+# See: https://doc.courtbouillon.org/weasyprint/stable/first_steps.html#debian-11
 libglib2.0-0
 libcairo2
 libpango-1.0-0
@@ -11,3 +12,4 @@ libharfbuzz-subset0
 libgdk-pixbuf2.0-0
 libffi-dev
 shared-mime-info
+libfontconfig1
